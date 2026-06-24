@@ -1,0 +1,54 @@
+# jobs/qfc_clipper/config.toml  — copy this file to config.toml and edit.
+# Relevance filtering is OPT-IN: with `departments` empty/omitted the clipper
+# keeps its legacy behavior (clip everything, --max unchanged).
+
+# Departments to clip from. Names must match QFC's left-panel exactly.
+departments = [
+  # "Adult Beverage",
+  # "Baby",
+  # "Bakery",
+  # "Baking Goods",
+  # "Beauty",
+  "Beverages",
+  # "Breakfast",
+  # "Candy",
+  # "Canned & Packaged",
+  "Cleaning Products",
+  # "Condiment & Sauces",
+  "Dairy",
+  # "Deli",
+  "Frozen",
+  # "Garden & Patio",
+  # "General",
+  # "Gift Cards",
+  # "Halloween",
+  # "Health",
+  # "Holiday & Seasonal Goods",
+  # "Home Decor",
+  # "International",
+  "Meat & Seafood",
+  # "Natural & Organic",
+  # "Party",
+  # "Pasta",
+  # "Personal Care",
+  # "Pet Care",
+  "Produce",
+  # "Seasonal",
+  "Snacks",
+  # "Tobacco",
+]
+
+# Cap on clips, accounting for already-clipped coupons (relevance mode only).
+max_clips = 150
+
+# Skip coupons whose (estimated) value is below this. 0 = no floor.
+min_savings = 0.0
+
+# Include BOGO/percent coupons (valued via [estimates] below)? false = $-only.
+include_nondollar = true
+
+[estimates]
+# Assumed dollar value when a literal "$X off" can't be read. Tune from --dry-run.
+bogo = 5.00
+assumed_item_price = 4.00
+unknown = 1.00

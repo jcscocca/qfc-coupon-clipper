@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent that runs the QFC clipper weekly inside the user's GUI
+  session (so the visible browser can open — a plain cron job can't).
+
+  Install (replace /ABSOLUTE/PATH/TO with your checkout location, and the
+  Label prefix if you like):
+    cp scheduling/com.example.qfc-clipper.plist ~/Library/LaunchAgents/
+    launchctl bootout gui/$(id -u)/com.example.qfc-clipper 2>/dev/null
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.qfc-clipper.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.qfc-clipper</string>
+
+    <!-- Run the clipper. --no-wait-login skips the interactive ENTER prompt; the
+         job relies on the saved login profile at ~/.qfc_clipper_profile. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/ABSOLUTE/PATH/TO/qfc-coupon-clipper/run.sh</string>
+        <string>--no-wait-login</string>
+    </array>
+
+    <!-- Weekly: Wednesday (Weekday 3) at 08:00 local time. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>3</integer>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Do not run on load; only on the schedule above. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr (separate from logs/qfc_clipper.log). -->
+    <key>StandardOutPath</key>
+    <string>/ABSOLUTE/PATH/TO/qfc-coupon-clipper/logs/launchd.qfc_clipper.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/ABSOLUTE/PATH/TO/qfc-coupon-clipper/logs/launchd.qfc_clipper.err.log</string>
+</dict>
+</plist>

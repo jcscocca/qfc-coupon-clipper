@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Logs produced by scheduled runs
+*.log
+logs/
+
+# Browser login profiles / saved sessions — NEVER commit these.
+# They contain authenticated cookies for your personal accounts.
+.qfc_clipper_profile/
+*_profile/
+profiles/
+
+# Per-user config (copy config.example.toml -> config.toml and edit locally).
+config.toml
+
+# Secrets
+.env
+.env.local

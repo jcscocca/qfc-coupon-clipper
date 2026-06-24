@@ -1,0 +1,2 @@
+# Dev/test dependencies (pytest). Not needed to run the clipper.
+pytest>=8.0
