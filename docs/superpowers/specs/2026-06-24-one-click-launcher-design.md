@@ -1,12 +1,12 @@
 # One-Click Launcher — Design
 
 **Date:** 2026-06-24
-**Status:** Approved in brainstorming; pending spec review
+**Status:** Approved; ready to implement (rebased onto `main` after repo reorg `e27995b`)
 
 ## Problem
 
 Running the clipper today takes several manual terminal steps: install Python 3.11+,
-clone, `./setup.sh`, `source .venv/bin/activate`, `python qfc_coupon_clipper.py`,
+clone, `./scripts/setup.sh`, `source .venv/bin/activate`, `python qfc_coupon_clipper.py`,
 then watch for the coupons to appear and **press ENTER**. We want a one-click way
 for people who have cloned the repo to run it without dealing with venvs, setup, or
 remembering the ENTER step.
@@ -94,7 +94,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 if [[ ! -d .venv ]]; then
   echo "First run — setting up (this can take a minute)…"
-  ./setup.sh
+  ./scripts/setup.sh
 fi
 source .venv/bin/activate
 python qfc_coupon_clipper.py "$@"
@@ -109,8 +109,8 @@ read -r -p "Done — press ENTER to close. "
 cd "$(dirname "$0")" && exec ./launch.sh "$@"
 ```
 
-**Relationship to `run.sh`:** intentionally separate.
-- `run.sh` — unattended/cron/launchd; redirects output to `logs/qfc_clipper.log`;
+**Relationship to `scripts/run.sh`:** intentionally separate.
+- `scripts/run.sh` — unattended/cron/launchd; redirects output to `logs/qfc_clipper.log`;
   used with `--no-wait-login`.
 - `launch.sh` / `launch.command` — interactive one-click; visible output; auto-setup;
   relies on the new auto-detect login.
@@ -122,9 +122,9 @@ cd "$(dirname "$0")" && exec ./launch.sh "$@"
   browser opens and it proceeds automatically.
 - Update the existing "First run" steps (currently ~lines 28–40) to drop the "press
   ENTER" instruction in favor of "it proceeds automatically once you're signed in."
-- Clarify `run.sh` is for scheduled/unattended use vs. `launch.*` for interactive use.
+- Clarify `scripts/run.sh` is for scheduled/unattended use vs. `launch.*` for interactive use.
 
-### D. Tests — `test_qfc_clipper.py`
+### D. Tests — `tests/test_qfc_clipper.py`
 
 Unit-test `wait_until_ready` by monkeypatching `scan_coupon_buttons`,
 `detect_logged_out`, `dismiss_modal`, and the sleep/clock:
@@ -147,8 +147,8 @@ unless requested.
 | `launch.sh` | new | Interactive launcher + first-run bootstrap |
 | `launch.command` | new | macOS double-click wrapper |
 | `qfc_coupon_clipper.py` | edit | Replace ENTER gate with `wait_until_ready()` |
-| `README.md` | edit | Quick-start + first-run wording; run.sh vs launch.* |
-| `test_qfc_clipper.py` | edit | Tests for `wait_until_ready()` |
+| `README.md` | edit | Quick-start + first-run wording; scripts/run.sh vs launch.* |
+| `tests/test_qfc_clipper.py` | edit | Tests for `wait_until_ready()` |
 
-Line references above are from the repo at design time (commit `955bfd6`) and should be
-re-confirmed during implementation.
+Line references above point into `qfc_coupon_clipper.py`, which the repo reorg
+(commit `e27995b`) did **not** move, so they still hold; re-confirm during implementation.
