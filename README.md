@@ -22,7 +22,7 @@ Requires Python 3.11+ (for the stdlib `tomllib`). Works on macOS and Linux.
 ```bash
 git clone https://github.com/jcscocca/qfc-coupon-clipper.git
 cd qfc-coupon-clipper
-./setup.sh        # creates .venv, installs deps, pulls Playwright's Chromium
+./scripts/setup.sh   # creates .venv, installs deps, pulls Playwright's Chromium
 ```
 
 ## First run
@@ -105,10 +105,10 @@ job at the next opportunity after wake.
 ```bash
 crontab -e
 # Clip QFC coupons every Wednesday at 8am:
-0 8 * * 3 /ABSOLUTE/PATH/TO/qfc-coupon-clipper/run.sh --no-wait-login
+0 8 * * 3 /ABSOLUTE/PATH/TO/qfc-coupon-clipper/scripts/run.sh --no-wait-login
 ```
 
-`run.sh` activates the venv and appends output to `logs/qfc_clipper.log`.
+`scripts/run.sh` activates the venv and appends output to `logs/qfc_clipper.log`.
 
 If QFC logs your saved session out, a scheduled run exits with a clear "re-login
 needed" message (status `2`) instead of silently clipping nothing — open the script

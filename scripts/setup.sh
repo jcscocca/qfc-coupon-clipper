@@ -2,10 +2,10 @@
 # Bootstrap a virtual environment for the QFC coupon clipper and install its
 # dependencies (including Playwright's Chromium). Run once after cloning.
 #
-#   ./setup.sh
+#   ./scripts/setup.sh
 #
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 PY="${PYTHON:-python3}"
 

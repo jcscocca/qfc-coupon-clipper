@@ -4,18 +4,12 @@ These guard the text-based clip/clipped detection — the part most likely to
 silently break if QFC changes its button wording. They import the module
 directly (no browser is launched: the Playwright work lives under main()).
 
-Run with:  pytest jobs/qfc_clipper
+Run with:  pytest
 """
 
-import sys
-from pathlib import Path
+import pytest
 
-# Make the job's module importable no matter where pytest is invoked from.
-sys.path.insert(0, str(Path(__file__).parent))
-
-import pytest  # noqa: E402
-
-import qfc_coupon_clipper as clipper  # noqa: E402
+import qfc_coupon_clipper as clipper
 
 
 # --- looks_clipped ---------------------------------------------------------

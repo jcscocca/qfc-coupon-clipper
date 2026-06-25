@@ -20,7 +20,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/ABSOLUTE/PATH/TO/qfc-coupon-clipper/run.sh</string>
+        <string>/ABSOLUTE/PATH/TO/qfc-coupon-clipper/scripts/run.sh</string>
         <string>--no-wait-login</string>
     </array>
 

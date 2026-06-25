@@ -2,17 +2,17 @@
 # Run the QFC clipper using the local venv. Designed for cron/launchd: activates
 # the environment, runs the clipper, and appends output to logs/qfc_clipper.log.
 #
-#   ./run.sh [args passed to qfc_coupon_clipper.py...]
-#   ./run.sh --no-wait-login        # for scheduled runs
+#   ./scripts/run.sh [args passed to qfc_coupon_clipper.py...]
+#   ./scripts/run.sh --no-wait-login        # for scheduled runs
 #
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 mkdir -p logs
 LOG="logs/qfc_clipper.log"
 
 if [[ ! -d .venv ]]; then
-  echo "No .venv found — run ./setup.sh first." >&2
+  echo "No .venv found — run ./scripts/setup.sh first." >&2
   exit 1
 fi
 
