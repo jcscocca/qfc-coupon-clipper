@@ -321,6 +321,30 @@ def scroll_to_load_all(page, debug=False, max_scrolls=60):
         log(f"  scroll {n+1}: page height {height}", debug=debug, is_debug_only=True)
 
 
+def _find_department_option(page, name, *, timeout=8.0, poll=0.5):
+    """Poll until a visible filter option whose bare text equals `name` appears.
+
+    The Departments panel lazy-renders its rows (its network never goes idle),
+    so a single snapshot lookup races the render and can wrongly mark a present
+    department as missing. Returns the option locator, or None if it never
+    becomes visible within `timeout` seconds.
+    """
+    pat = re.compile(rf"^\s*{re.escape(name)}\s*$", re.I)
+    deadline = time.monotonic() + timeout
+    while True:
+        opts = page.get_by_text(pat)
+        try:
+            for i in range(opts.count()):
+                o = opts.nth(i)
+                if o.is_visible():
+                    return o
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(poll)
+
+
 def select_departments(page, wanted, debug=False):
     """Tick the requested departments in the left Departments panel.
 
@@ -353,14 +377,8 @@ def select_departments(page, wanted, debug=False):
 
     matched, missing = [], []
     for name in wanted:
-        pat = re.compile(rf"^\s*{re.escape(name)}\s*$", re.I)
         try:
-            opts = page.get_by_text(pat)
-            target = None
-            for i in range(opts.count()):
-                if opts.nth(i).is_visible():
-                    target = opts.nth(i)
-                    break
+            target = _find_department_option(page, name)
             if target is None:
                 missing.append(name)
                 continue

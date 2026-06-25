@@ -192,3 +192,53 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
     assert rc == 0
     # budget is 5 and collection repeats, yet each unique coupon is clicked once.
     assert [b.clicks for b in btns] == [1, 1, 1]
+
+
+# --- _find_department_option: poll past the panel's lazy render -------------
+
+class _Opt:
+    def __init__(self, visible):
+        self._visible = visible
+
+    def is_visible(self):
+        return self._visible
+
+
+class _Opts:
+    def __init__(self, visible):
+        self._visible = visible
+
+    def count(self):
+        return 1
+
+    def nth(self, i):
+        return _Opt(self._visible)
+
+
+class _LazyPanel:
+    """Fake page whose department row becomes visible only on/after the
+    `appear_on`-th lookup (None = never), modelling the panel's lazy render."""
+    def __init__(self, appear_on):
+        self.lookups = 0
+        self.appear_on = appear_on
+
+    def get_by_text(self, pattern):
+        self.lookups += 1
+        visible = self.appear_on is not None and self.lookups >= self.appear_on
+        return _Opts(visible)
+
+
+def test_find_department_option_polls_until_visible(monkeypatch):
+    monkeypatch.setattr(clipper.time, "sleep", lambda s: None)
+    panel = _LazyPanel(appear_on=3)            # row renders on the 3rd lookup
+    opt = clipper._find_department_option(panel, "Dairy", timeout=10, poll=0)
+    assert opt is not None
+    assert panel.lookups >= 3                  # it kept polling instead of giving up
+
+
+def test_find_department_option_times_out(monkeypatch):
+    monkeypatch.setattr(clipper.time, "sleep", lambda s: None)
+    times = iter([0.0, 999.0, 999.0])
+    monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
+    panel = _LazyPanel(appear_on=None)         # never renders
+    assert clipper._find_department_option(panel, "Nope", timeout=8, poll=0) is None
