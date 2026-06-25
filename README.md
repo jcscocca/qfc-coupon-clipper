@@ -54,7 +54,7 @@ python qfc_coupon_clipper.py
 
 ## Clipping only relevant coupons (departments + savings)
 
-By default the clipper clips every coupon. QFC caps an account at ~150 clipped
+By default the clipper clips every coupon. QFC caps an account at ~250 clipped
 coupons, so to spend that budget well you can restrict it to the departments you shop
 and let it prioritize the highest-savings coupons.
 
@@ -64,7 +64,7 @@ cp config.example.toml config.toml      # then edit it
 
 - `departments` — uncomment the aisles you shop (names must match QFC's left panel
   exactly). **Empty = clip everything (legacy behavior).**
-- `max_clips` — cap (default 150); the script subtracts already-clipped coupons.
+- `max_clips` — cap (default 250); the script subtracts already-clipped coupons.
 - `min_savings` — optional floor; skip coupons below this value.
 - `include_nondollar` / `[estimates]` — BOGO and `% off` coupons get an assumed
   dollar value so they rank fairly (a BOGO defaults to $5, beating small coupons).

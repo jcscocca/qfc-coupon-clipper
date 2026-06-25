@@ -39,7 +39,7 @@ departments = [
 ]
 
 # Cap on clips, accounting for already-clipped coupons (relevance mode only).
-max_clips = 150
+max_clips = 250
 
 # Skip coupons whose (estimated) value is below this. 0 = no floor.
 min_savings = 0.0

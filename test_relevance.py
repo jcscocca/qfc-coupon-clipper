@@ -106,7 +106,7 @@ from relevance import Config, load_config  # noqa: E402
 def test_defaults_when_no_file():
     cfg = load_config(None)
     assert cfg.departments == []
-    assert cfg.max_clips == 150
+    assert cfg.max_clips == 250
     assert cfg.min_savings == 0.0
     assert cfg.include_nondollar is True
     assert cfg.estimates.bogo == 5.0
