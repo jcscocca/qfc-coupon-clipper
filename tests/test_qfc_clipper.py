@@ -94,3 +94,45 @@ def test_clipped_implies_not_clippable():
     for label in CLIPPED_LABELS + CLIPPABLE_LABELS + NOT_CLIPPABLE_LABELS:
         if clipper.looks_clipped(label):
             assert not clipper.looks_clippable(label)
+
+
+# --- wait_until_ready -------------------------------------------------------
+
+def _patch_ready(monkeypatch, scan_results, logged_out=False):
+    """Drive wait_until_ready with canned scan_coupon_buttons results.
+
+    scan_results: list of (n_clip, n_clipped) tuples returned in order; the
+    last entry repeats if the loop polls more times than provided.
+    """
+    state = {"i": 0}
+
+    def fake_scan(page):
+        i = min(state["i"], len(scan_results) - 1)
+        state["i"] += 1
+        return scan_results[i]
+
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", fake_scan)
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "detect_logged_out", lambda page: logged_out)
+    monkeypatch.setattr(clipper.time, "sleep", lambda s: None)
+
+
+def test_wait_until_ready_immediate(monkeypatch, capsys):
+    _patch_ready(monkeypatch, [(3, 0)])
+    assert clipper.wait_until_ready(page=None, timeout=180, poll=0) is True
+    assert "Sign in" not in capsys.readouterr().out
+
+
+def test_wait_until_ready_after_login(monkeypatch, capsys):
+    # First poll: nothing visible + logged out. Second poll: coupons appear.
+    _patch_ready(monkeypatch, [(0, 0), (1, 0)], logged_out=True)
+    assert clipper.wait_until_ready(page=None, timeout=180, poll=0) is True
+    assert capsys.readouterr().out.count("Sign in to QFC") == 1
+
+
+def test_wait_until_ready_timeout(monkeypatch, capsys):
+    _patch_ready(monkeypatch, [(0, 0)], logged_out=False)
+    times = iter([0.0, 999.0, 999.0])
+    monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
+    assert clipper.wait_until_ready(page=None, timeout=180, poll=0) is False
+    assert "Sign in" not in capsys.readouterr().out

@@ -181,6 +181,32 @@ def scan_coupon_buttons(page):
     return n_clip, n_clipped
 
 
+def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
+    """Poll until the coupon grid is rendered (i.e. we're signed in), instead of
+    blocking on ENTER. Shows a one-time sign-in prompt if the page looks logged
+    out. Returns True if coupons appeared within `timeout` seconds, else False.
+
+    A positive signal (any clippable/clipped coupon visible) wins immediately, so
+    a stray "Sign In" footer link never aborts a good session.
+    """
+    deadline = time.monotonic() + timeout
+    prompted = False
+    while True:
+        dismiss_modal(page, debug=debug)
+        n_clip, n_clipped = scan_coupon_buttons(page)
+        if n_clip + n_clipped > 0:
+            return True
+        if not prompted and detect_logged_out(page):
+            print("\n" + "=" * 64)
+            print("Sign in to QFC in the browser window that just opened.")
+            print("Clipping starts automatically once your coupons load.")
+            print("=" * 64, flush=True)
+            prompted = True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+
+
 def count_clipped_total(page, debug=False):
     """Best-effort count of coupons already clipped on the account.
 
