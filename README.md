@@ -25,6 +25,18 @@ cd qfc-coupon-clipper
 ./scripts/setup.sh   # creates .venv, installs deps, pulls Playwright's Chromium
 ```
 
+## Quick start (one-click)
+
+Once you've cloned the repo (above), you don't need the manual steps below:
+
+- **macOS:** double-click **`launch.command`** in Finder.
+- **Linux:** run **`./launch.sh`**.
+
+The first run installs everything automatically (it calls `scripts/setup.sh`), then
+opens the browser. Sign in to QFC if you aren't already — clipping starts on its own
+once your coupons load. (`launch.*` is the interactive path; `scripts/run.sh` is the
+unattended/scheduled one.)
+
 ## First run
 
 ```bash
@@ -35,7 +47,8 @@ python qfc_coupon_clipper.py
 1. A browser window opens at the QFC coupons page.
 2. Sign in and select your store if prompted. Your login is saved to
    `~/.qfc_clipper_profile` and reused next time.
-3. Switch back to the terminal and press **ENTER**.
+3. It detects when you're signed in and your coupons have loaded, then starts
+   automatically — no need to switch back and press ENTER.
 4. It scrolls to load all coupons, then clips each one with short randomized pauses,
    printing progress. Any stray "Coupon Details" modal is auto-closed.
 
