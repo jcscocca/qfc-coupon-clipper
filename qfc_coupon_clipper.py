@@ -23,7 +23,7 @@ Usage:
 First run:
     1. A browser window opens at the QFC coupons page.
     2. Sign in and pick your store if prompted.
-    3. Return to the terminal and press ENTER. The script takes over and clips.
+    3. The script detects when your coupons have loaded and starts on its own.
     On later runs you'll usually already be logged in and it just proceeds.
 
 Notes:
@@ -500,15 +500,14 @@ def main():
             log("Page load timed out; continuing anyway.")
 
         if not args.no_wait_login:
-            print("\n" + "=" * 64)
-            print("If you're not signed in: sign in and select your store now.")
-            print("When the coupons are visible, come back here and press ENTER.")
-            print("=" * 64)
-            try:
-                input()
-            except EOFError:
-                log("No interactive input; proceeding after a short wait.")
-                human_pause(3, 4)
+            if not wait_until_ready(page, debug=args.debug):
+                print("\nCouldn't auto-detect your coupons. If you're signed in, press "
+                      "ENTER to continue; otherwise sign in first, then ENTER "
+                      "(Ctrl-C to quit).")
+                try:
+                    input()
+                except EOFError:
+                    log("No interactive input; proceeding.")
 
         # Close any modal that may be open before we start.
         dismiss_modal(page, debug=args.debug)
