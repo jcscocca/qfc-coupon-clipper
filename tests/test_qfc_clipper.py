@@ -136,3 +136,59 @@ def test_wait_until_ready_timeout(monkeypatch, capsys):
     monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
     assert clipper.wait_until_ready(page=None, timeout=180, poll=0) is False
     assert "Sign in" not in capsys.readouterr().out
+
+
+# --- _clip_relevant: never double-click the same coupon ---------------------
+
+class _FakeBtn:
+    """Stand-in for a Playwright locator that counts how often it's clicked."""
+    def __init__(self):
+        self.clicks = 0
+
+    def is_visible(self):
+        return True
+
+    def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+    def click(self, timeout=None):
+        self.clicks += 1
+
+
+class _NoText:
+    def count(self):
+        return 0
+
+
+class _FakePage:
+    """Only needs get_by_text for _clip_relevant's limit-message safety net."""
+    def get_by_text(self, pattern):
+        return _NoText()
+
+
+def test_clip_relevant_never_double_clicks(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    btns = [_FakeBtn() for _ in range(3)]
+    cands = [
+        Candidate(label=f"Clip for coupon: item {i}",
+                  savings=Savings(value=float(3 - i), kind="dollar", estimated=False),
+                  locator=btns[i])
+        for i in range(3)
+    ]
+    # Worst case: every pass re-collects the same coupons (their labels never
+    # flip to "Unclip"), which is exactly what triggered the duplicate clicks.
+    monkeypatch.setattr(clipper, "collect_candidates",
+                        lambda page, estimates, debug=False: list(cands))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
+
+    rc = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
+
+    assert rc == 0
+    # budget is 5 and collection repeats, yet each unique coupon is clicked once.
+    assert [b.clicks for b in btns] == [1, 1, 1]

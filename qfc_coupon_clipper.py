@@ -394,6 +394,9 @@ def _clip_relevant(page, cfg, budget, args):
     """
     clipped = 0
     limit_hit = False
+    clicked_keys = set()   # coupons clicked this run (by label) — never re-click;
+                           # QFC flips the button to "Unclip" asynchronously, so a
+                           # just-clicked coupon can still look clippable next pass
     while clipped < budget and not limit_hit:
         dismiss_modal(page, debug=args.debug)
         ranked = rank_candidates(
@@ -414,12 +417,15 @@ def _clip_relevant(page, cfg, budget, args):
         for c in ranked:
             if clipped >= budget:
                 break
+            if c.label in clicked_keys:
+                continue
             try:
                 if not c.locator.is_visible():
                     continue
                 c.locator.scroll_into_view_if_needed(timeout=3000)
                 human_pause(0.3, 0.8)
                 c.locator.click(timeout=5000)
+                clicked_keys.add(c.label)
                 clipped += 1
                 progressed = True
                 log(f"  clipped ({clipped}/{budget}) ${c.savings.value:.2f}: {c.label!r}")
