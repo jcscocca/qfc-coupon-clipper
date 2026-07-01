@@ -65,6 +65,17 @@ CLIP_TEXTS = ["clip for coupon", "clip", "add coupon", "load coupon", "add to ca
 # Fragments that mean the coupon is ALREADY clipped -> skip it.
 CLIPPED_TEXTS = ["clipped", "unclip", "added", "remove coupon"]
 
+# On-page text meaning QFC cut us off at the account clip limit. fill_to_limit
+# clips toward the cap, so this is the primary guard against over-clipping: it
+# must catch QFC's real wording ("reached the maximum number of coupons you can
+# clip", "coupon limit reached") in either order, without matching ordinary
+# "Clip for coupon" tiles.
+_LIMIT_RE = re.compile(
+    r"(?:limit|maximum).{0,20}(?:reach|clip)"
+    r"|(?:reach\w*|exceed\w*).{0,40}(?:limit|maximum)",
+    re.I,
+)
+
 # ---------------------------------------------------------------------------
 
 
@@ -171,6 +182,23 @@ def detect_logged_out(page) -> bool:
     return False
 
 
+def warn_no_coupons(page):
+    """Print the shared signed-out / no-coupons diagnostic and re-login hint.
+
+    Distinguishes a SIGNED-OUT session from an empty/blocked page so a stale
+    login is actionable instead of masquerading as a config error.
+    """
+    if detect_logged_out(page):
+        reason = "you appear to be SIGNED OUT of QFC"
+    else:
+        reason = "no coupons found (page may be blocked, empty, or changed)"
+    log("\n" + "*" * 64)
+    log(f"WARNING: {reason}.")
+    log("Re-login needed: run this script interactively (WITHOUT --no-wait-login)")
+    log(f"and sign in to refresh the saved session at {PROFILE_DIR}.")
+    log("*" * 64)
+
+
 def scan_coupon_buttons(page):
     """Return (n_clippable, n_clipped) over all buttons currently on the page."""
     n_clip = n_clipped = 0
@@ -214,23 +242,6 @@ def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)
-
-
-def count_clipped_total(page, debug=False):
-    """Best-effort count of coupons already clipped on the account.
-
-    This scans the current DOM for "Unclip"-style controls. Callers must clear
-    filters and fully load the coupon list first to make the count account-wide.
-    QFC's visible limit warning remains the final safety net.
-    """
-    try:
-        _, n_clipped = scan_coupon_buttons(page)
-        if debug:
-            log(f"  [debug] already-clipped (current view): {n_clipped}",
-                debug=debug)
-        return n_clipped
-    except Exception:
-        return 0
 
 
 def collect_buttons(page, debug=False):
@@ -418,6 +429,12 @@ def select_departments(page, wanted, debug=False):
     return matched, missing
 
 
+# How many times to reload the list on a stalled pass before concluding the
+# candidate pool is truly exhausted. >1 so a single lazy re-render doesn't cut
+# the preferred phase short (and, in fill mode, wrongly clear the filters).
+_STALL_RESCANS = 2
+
+
 def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
                    min_savings=None, include_nondollar=None, phase="preferred"):
     """Clip the highest-value coupons in the current list, up to `budget`.
@@ -434,7 +451,7 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
     """
     clipped = 0
     limit_hit = False
-    rescanned_after_stall = False
+    stall_rescans = 0
     if clicked_keys is None:
         clicked_keys = set()
     if min_savings is None:
@@ -447,9 +464,9 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
             collect_candidates(page, cfg.estimates, debug=(args.debug and clipped == 0)),
             min_savings=min_savings, include_nondollar=include_nondollar)
         if not ranked:
-            if not rescanned_after_stall:
+            if stall_rescans < _STALL_RESCANS:
                 scroll_to_load_all(page, debug=args.debug)
-                rescanned_after_stall = True
+                stall_rescans += 1
                 continue
             break
 
@@ -487,8 +504,7 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
                 dismiss_modal(page, debug=args.debug)
             # limit safety net: a visible 'limit/maximum reached' message.
             try:
-                warn = page.get_by_text(re.compile(r"(limit|maximum).{0,20}(reach|clip)",
-                                                   re.I))
+                warn = page.get_by_text(_LIMIT_RE)
                 if warn.count() and warn.first.is_visible():
                     log("Reached QFC's account clip limit; stopping.")
                     limit_hit = True
@@ -496,12 +512,12 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
             except Exception:
                 pass
         if not progressed:
-            if not rescanned_after_stall:
+            if stall_rescans < _STALL_RESCANS:
                 scroll_to_load_all(page, debug=args.debug)
-                rescanned_after_stall = True
+                stall_rescans += 1
                 continue
             break
-        rescanned_after_stall = False
+        stall_rescans = 0
         human_pause(1.5, 2.5)
 
     return ClipResult(clipped=clipped, exhausted=clipped < budget and not limit_hit,
@@ -526,11 +542,13 @@ def _run_relevance_mode(page, cfg, args):
     n_clip, n_clipped = scan_coupon_buttons(page)
     log(f"Unfiltered page state: {n_clip} clippable, {n_clipped} already-clipped "
         "coupon(s) visible.")
-    if n_clip == 0 and n_clipped == 0 and getattr(args, "no_wait_login", False):
-        log("Scheduled run found no coupons; exiting with status 2.")
-        return 2
+    if n_clip == 0 and n_clipped == 0:
+        warn_no_coupons(page)
+        if getattr(args, "no_wait_login", False):
+            log("Scheduled run can't proceed; exiting with status 2.")
+            return 2
 
-    already = count_clipped_total(page, debug=args.debug)
+    already = n_clipped
     budget = max(0, cfg.max_clips - already)
     log(f"Remaining capacity: {budget} (cap {cfg.max_clips} - "
         f"{already} already clipped)")
@@ -559,20 +577,22 @@ def _run_relevance_mode(page, cfg, args):
     total_used = preferred_used
     limit_hit = preferred.limit_hit
 
+    fill_skipped = False
     remaining = max(0, budget - total_used)
     if cfg.fill_to_limit and remaining and not limit_hit:
         log(f"Preferred coupons exhausted with {remaining} capacity remaining; "
             "clearing filters to fill it.")
         if not clear_filters(page, debug=args.debug):
-            log("WARNING: could not clear department filters; stopping before "
-                "the fill phase.")
-            return 5
-        _load_full_coupon_list(page, args)
-        fill = _clip_relevant(
-            page, cfg, remaining, args, clicked_keys=clicked_keys,
-            min_savings=0.0, include_nondollar=True, phase="fill")
-        total_used += fill.planned if args.dry_run else fill.clipped
-        limit_hit = fill.limit_hit
+            log("WARNING: could not clear department filters; skipping the fill "
+                "phase (preferred clips are kept).")
+            fill_skipped = True
+        else:
+            _load_full_coupon_list(page, args)
+            fill = _clip_relevant(
+                page, cfg, remaining, args, clicked_keys=clicked_keys,
+                min_savings=0.0, include_nondollar=True, phase="fill")
+            total_used += fill.planned if args.dry_run else fill.clipped
+            limit_hit = fill.limit_hit
 
     log("\n" + "-" * 40)
     if args.dry_run:
@@ -582,6 +602,9 @@ def _run_relevance_mode(page, cfg, args):
         log(f"Done. Clipped {total_used} coupon(s); QFC reported its account limit.")
     elif total_used >= budget:
         log(f"Done. Clipped {total_used} coupon(s); configured capacity reached.")
+    elif fill_skipped:
+        log(f"Done. Clipped {total_used} coupon(s); could not clear filters, so "
+            f"the fill phase was skipped ({budget - total_used} capacity unused).")
     elif not cfg.fill_to_limit:
         log(f"Done. Clipped {total_used} coupon(s); preferred coupons were "
             f"exhausted with {budget - total_used} capacity remaining.")
@@ -675,16 +698,7 @@ def main():
         log(f"Page state: {n_clip} clippable, {n_clipped} already-clipped "
             "coupon(s) visible.")
         if n_clip == 0 and n_clipped == 0:
-            if detect_logged_out(page):
-                reason = "you appear to be SIGNED OUT of QFC"
-            else:
-                reason = "no coupons found (page may be blocked, empty, or changed)"
-            log("\n" + "*" * 64)
-            log(f"WARNING: {reason}.")
-            log("Re-login needed: run this script interactively (WITHOUT "
-                "--no-wait-login)")
-            log(f"and sign in to refresh the saved session at {PROFILE_DIR}.")
-            log("*" * 64)
+            warn_no_coupons(page)
             if args.no_wait_login:
                 log("Scheduled run can't proceed; exiting with status 2.")
                 ctx.close()
