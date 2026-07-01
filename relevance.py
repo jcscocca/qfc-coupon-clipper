@@ -103,6 +103,7 @@ class Config:
     max_clips: int = 250
     min_savings: float = 0.0
     include_nondollar: bool = True
+    fill_to_limit: bool = False
     estimates: Estimates = field(default_factory=Estimates)
 
 
@@ -122,6 +123,7 @@ def load_config(path: "str | Path | None", overrides: "dict | None" = None) -> C
         max_clips=int(data.get("max_clips", 250)),
         min_savings=float(data.get("min_savings", 0.0)),
         include_nondollar=bool(data.get("include_nondollar", True)),
+        fill_to_limit=bool(data.get("fill_to_limit", False)),
         estimates=Estimates(
             bogo=float(est.get("bogo", 5.0)),
             assumed_item_price=float(est.get("assumed_item_price", 4.0)),

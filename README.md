@@ -81,6 +81,12 @@ cp config.example.toml config.toml      # then edit it
 - `min_savings` — optional floor; skip coupons below this value.
 - `include_nondollar` / `[estimates]` — BOGO and `% off` coupons get an assumed
   dollar value so they rank fairly (a BOGO defaults to $5, beating small coupons).
+- `fill_to_limit` — when `true`, clip configured departments first, then clear the
+  filters and clip the highest-value remaining coupons until `max_clips` is reached.
+
+Progress such as `68/206` means 68 coupons clipped from an estimated **remaining
+account capacity** of 206; it does not mean the page contained exactly 206 eligible
+coupons. Capacity is counted from the fully loaded, unfiltered coupon list.
 
 Preview before clipping — prints the ranked plan with `(est)` markers, clips nothing:
 

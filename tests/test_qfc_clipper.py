@@ -96,6 +96,36 @@ def test_clipped_implies_not_clippable():
             assert not clipper.looks_clippable(label)
 
 
+# --- account-limit message detection ---------------------------------------
+
+# Plausible ways QFC phrases the "you're at the cap" warning. fill_to_limit
+# clips toward the cap, so this is the primary guard against over-clipping.
+LIMIT_MESSAGES = [
+    "You have reached the maximum number of coupons you can clip.",
+    "You've reached your coupon limit.",
+    "You have reached your clip limit for this account.",
+    "Coupon limit reached.",
+    "Weekly clip limit reached",
+    "You have exceeded the maximum number of coupons.",
+]
+
+NON_LIMIT_MESSAGES = [
+    "Clip for coupon: $1.00 off eggs",
+    "Add to card",
+    "Save $5 on maximum-strength allergy relief",
+]
+
+
+@pytest.mark.parametrize("msg", LIMIT_MESSAGES)
+def test_limit_regex_matches_account_limit_wording(msg):
+    assert clipper._LIMIT_RE.search(msg) is not None
+
+
+@pytest.mark.parametrize("msg", NON_LIMIT_MESSAGES)
+def test_limit_regex_ignores_ordinary_coupon_text(msg):
+    assert clipper._LIMIT_RE.search(msg) is None
+
+
 # --- wait_until_ready -------------------------------------------------------
 
 def _patch_ready(monkeypatch, scan_results, logged_out=False):
@@ -181,17 +211,338 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
     # flip to "Unclip"), which is exactly what triggered the duplicate clicks.
     monkeypatch.setattr(clipper, "collect_candidates",
                         lambda page, estimates, debug=False: list(cands))
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
 
     cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
-    rc = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
 
-    assert rc == 0
+    assert result.clipped == 3
+    assert result.exhausted is True
+    assert result.limit_hit is False
     # budget is 5 and collection repeats, yet each unique coupon is clicked once.
     assert [b.clicks for b in btns] == [1, 1, 1]
+
+
+def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    first = Candidate("Clip for coupon: first", Savings(2.0, "dollar", False),
+                      _FakeBtn())
+    later = Candidate("Clip for coupon: later", Savings(1.0, "dollar", False),
+                      _FakeBtn())
+    state = {"rescanned": False, "scrolls": 0}
+
+    def fake_collect(page, estimates, debug=False):
+        return [first, later] if state["rescanned"] else [first]
+
+    def fake_scroll(page, debug=False):
+        state["rescanned"] = True
+        state["scrolls"] += 1
+
+    monkeypatch.setattr(clipper, "collect_candidates", fake_collect)
+    monkeypatch.setattr(clipper, "scroll_to_load_all", fake_scroll)
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=3, args=args)
+
+    # The late-appearing coupon is recovered by rescanning rather than being
+    # abandoned on the first empty pass.
+    assert result.clipped == 2
+    assert result.exhausted is True
+    assert state["scrolls"] >= 1
+
+
+def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    # A transient re-render returns nothing for the first pass AND the first
+    # rescan; the coupon only surfaces after a second rescan. A single rescan
+    # would abandon it (and, in fill_to_limit mode, wrongly clear filters).
+    late = Candidate("Clip for coupon: late", Savings(1.0, "dollar", False),
+                     _FakeBtn())
+    state = {"scrolls": 0, "served": False}
+
+    def fake_collect(page, estimates, debug=False):
+        if state["scrolls"] >= 2 and not state["served"]:
+            state["served"] = True
+            return [late]
+        return []
+
+    def fake_scroll(page, debug=False):
+        state["scrolls"] += 1
+
+    monkeypatch.setattr(clipper, "collect_candidates", fake_collect)
+    monkeypatch.setattr(clipper, "scroll_to_load_all", fake_scroll)
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=3, args=args)
+
+    assert result.clipped == 1
+
+
+def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    preferred = Candidate("Clip for coupon: preferred",
+                          Savings(2.0, "dollar", False), _FakeBtn())
+    fallback = Candidate("Clip for coupon: fallback",
+                         Savings(1.0, "dollar", False), _FakeBtn())
+    candidates = {"value": [preferred]}
+
+    monkeypatch.setattr(
+        clipper, "collect_candidates",
+        lambda page, estimates, debug=False: list(candidates["value"]))
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
+    attempted = set()
+
+    first = clipper._clip_relevant(
+        _FakePage(), cfg, budget=2, args=args, clicked_keys=attempted)
+    candidates["value"] = [preferred, fallback]
+    second = clipper._clip_relevant(
+        _FakePage(), cfg, budget=1, args=args, clicked_keys=attempted)
+
+    assert first.clipped == 1
+    assert second.clipped == 1
+    assert preferred.locator.clicks == 1
+    assert fallback.locator.clicks == 1
+
+
+def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    candidates = [
+        Candidate("Clip for coupon: preferred", Savings(2.0, "dollar", False)),
+        Candidate("Clip for coupon: fallback", Savings(1.0, "dollar", False)),
+    ]
+    monkeypatch.setattr(
+        clipper, "collect_candidates",
+        lambda page, estimates, debug=False: list(candidates))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
+    attempted = set()
+
+    preferred = clipper._clip_relevant(
+        _FakePage(), cfg, budget=1, args=args, clicked_keys=attempted,
+        phase="preferred")
+    fill = clipper._clip_relevant(
+        _FakePage(), cfg, budget=1, args=args, clicked_keys=attempted,
+        phase="fill")
+
+    assert preferred.planned == 1
+    assert fill.planned == 1
+    assert attempted == {candidate.label for candidate in candidates}
+
+
+# --- clear_filters ----------------------------------------------------------
+
+class _ClearButton:
+    def __init__(self, visible=True, enabled=True):
+        self.visible = visible
+        self.enabled = enabled
+        self.clicks = 0
+
+    def is_visible(self):
+        return self.visible
+
+    def is_enabled(self):
+        return self.enabled
+
+    def click(self):
+        self.clicks += 1
+
+
+class _ButtonList:
+    def __init__(self, buttons):
+        self.buttons = buttons
+
+    def count(self):
+        return len(self.buttons)
+
+    def nth(self, index):
+        return self.buttons[index]
+
+
+class _ClearPage:
+    def __init__(self, buttons):
+        self.buttons = buttons
+
+    def get_by_role(self, role, name=None):
+        assert (role, name) == ("button", "Clear All")
+        return _ButtonList(self.buttons)
+
+
+def test_clear_filters_clicks_each_visible_enabled_control(monkeypatch):
+    buttons = [_ClearButton(), _ClearButton(visible=False), _ClearButton()]
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    assert clipper.clear_filters(_ClearPage(buttons)) is True
+    assert [button.clicks for button in buttons] == [1, 0, 1]
+
+
+# --- fill-to-limit orchestration -------------------------------------------
+
+class _RunMouse:
+    def wheel(self, x, y):
+        pass
+
+
+class _RunPage:
+    mouse = _RunMouse()
+
+
+def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypatch):
+    from types import SimpleNamespace
+
+    events = []
+    clip_calls = []
+    clear_results = iter([True, True])
+
+    monkeypatch.setattr(
+        clipper, "clear_filters",
+        lambda page, debug=False: events.append("clear") or next(clear_results))
+    monkeypatch.setattr(
+        clipper, "scroll_to_load_all",
+        lambda page, debug=False: events.append("scroll"))
+    monkeypatch.setattr(
+        clipper, "scan_coupon_buttons",
+        lambda page: events.append("scan") or (206, 44))
+    monkeypatch.setattr(
+        clipper, "select_departments",
+        lambda page, wanted, debug=False: events.append("select") or (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    def fake_clip(page, cfg, budget, args, **kwargs):
+        events.append(f"clip:{kwargs['phase']}")
+        clip_calls.append((budget, kwargs))
+        if kwargs["phase"] == "preferred":
+            return clipper.ClipResult(clipped=68, exhausted=True)
+        return clipper.ClipResult(clipped=138, exhausted=False)
+
+    monkeypatch.setattr(clipper, "_clip_relevant", fake_clip)
+
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=250, min_savings=0.5,
+        include_nondollar=False, fill_to_limit=True, estimates=None)
+    args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
+
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 0
+    # The unfiltered list is scanned exactly once (before department selection);
+    # the already-clipped count comes from that scan, not a second pass.
+    assert events == [
+        "clear", "scroll", "scan", "select", "scroll", "clip:preferred",
+        "clear", "scroll", "clip:fill",
+    ]
+    assert [call[0] for call in clip_calls] == [206, 138]
+    assert clip_calls[0][1]["min_savings"] == 0.5
+    assert clip_calls[0][1]["include_nondollar"] is False
+    assert clip_calls[1][1]["min_savings"] == 0.0
+    assert clip_calls[1][1]["include_nondollar"] is True
+    assert (clip_calls[0][1]["clicked_keys"]
+            is clip_calls[1][1]["clicked_keys"])
+
+
+def test_relevance_mode_without_fill_reports_preferred_exhaustion(
+        monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (206, 44))
+    monkeypatch.setattr(clipper, "select_departments",
+                        lambda page, wanted, debug=False: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(
+        clipper, "_clip_relevant",
+        lambda *args, **kwargs: clipper.ClipResult(clipped=68, exhausted=True))
+
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=250, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=False, estimates=None)
+    args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
+
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 0
+    assert "preferred coupons were exhausted" in capsys.readouterr().out
+
+
+def test_relevance_mode_reports_clips_when_fill_clear_fails(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    # Initial clear succeeds; the pre-fill clear fails after preferred coupons
+    # were already clipped. The run must report those clips and succeed, not
+    # discard them behind a hard-failure exit code.
+    clear_results = iter([True, False])
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: next(clear_results))
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (206, 44))
+    monkeypatch.setattr(clipper, "select_departments",
+                        lambda page, wanted, debug=False: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(
+        clipper, "_clip_relevant",
+        lambda *args, **kwargs: clipper.ClipResult(clipped=68, exhausted=True))
+
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=250, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=True, estimates=None)
+    args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
+
+    rc = clipper._run_relevance_mode(_RunPage(), cfg, args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Clipped 68" in out
+
+
+def test_relevance_mode_scheduled_signed_out_warns(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    # A scheduled run whose session expired: the unfiltered scan finds nothing.
+    # It must surface the SIGNED OUT / re-login guidance, not a terse line.
+    monkeypatch.setattr(clipper, "clear_filters", lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (0, 0))
+    monkeypatch.setattr(clipper, "detect_logged_out", lambda page: True)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=250, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=True, estimates=None)
+    args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0,
+                           no_wait_login=True)
+
+    rc = clipper._run_relevance_mode(_RunPage(), cfg, args)
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "SIGNED OUT" in out
 
 
 # --- _find_department_option: poll past the panel's lazy render -------------

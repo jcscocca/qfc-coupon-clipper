@@ -47,6 +47,10 @@ min_savings = 0.0
 # Include BOGO/percent coupons (valued via [estimates] below)? false = $-only.
 include_nondollar = true
 
+# After preferred departments are exhausted, clear filters and keep clipping the
+# highest-value remaining coupons until max_clips or QFC's account limit.
+fill_to_limit = false
+
 [estimates]
 # Assumed dollar value when a literal "$X off" can't be read. Tune from --dry-run.
 bogo = 5.00
