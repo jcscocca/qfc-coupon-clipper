@@ -104,6 +104,7 @@ def test_defaults_when_no_file():
     assert cfg.max_clips == 250
     assert cfg.min_savings == 0.0
     assert cfg.include_nondollar is True
+    assert cfg.fill_to_limit is False
     assert cfg.estimates.bogo == 5.0
     assert cfg.estimates.assumed_item_price == 4.0
     assert cfg.estimates.unknown == 1.0
@@ -116,6 +117,7 @@ def test_reads_toml(tmp_path):
         "max_clips = 50\n"
         "min_savings = 0.5\n"
         "include_nondollar = false\n"
+        "fill_to_limit = true\n"
         "[estimates]\n"
         "bogo = 7.0\n"
     )
@@ -124,6 +126,7 @@ def test_reads_toml(tmp_path):
     assert cfg.max_clips == 50
     assert cfg.min_savings == 0.5
     assert cfg.include_nondollar is False
+    assert cfg.fill_to_limit is True
     assert cfg.estimates.bogo == 7.0
     assert cfg.estimates.assumed_item_price == 4.0  # default preserved
 

@@ -38,6 +38,7 @@ import random
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -65,6 +66,14 @@ CLIP_TEXTS = ["clip for coupon", "clip", "add coupon", "load coupon", "add to ca
 CLIPPED_TEXTS = ["clipped", "unclip", "added", "remove coupon"]
 
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ClipResult:
+    clipped: int
+    exhausted: bool
+    limit_hit: bool = False
+    planned: int = 0
 
 
 def log(msg, *, debug=False, is_debug_only=False):
@@ -210,11 +219,9 @@ def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
 def count_clipped_total(page, debug=False):
     """Best-effort count of coupons already clipped on the account.
 
-    v1: reuse scan_coupon_buttons on the CURRENT view (the count of 'Unclip'
-    style buttons). NOTE: when a department filter is active this is the
-    filtered count, not account-wide; the runtime limit safety net (Task 9)
-    is what actually guarantees we never exceed the cap. Confirm via --debug
-    whether QFC exposes an account-wide clipped count to improve this later.
+    This scans the current DOM for "Unclip"-style controls. Callers must clear
+    filters and fully load the coupon list first to make the count account-wide.
+    QFC's visible limit warning remains the final safety net.
     """
     try:
         _, n_clipped = scan_coupon_buttons(page)
@@ -345,6 +352,28 @@ def _find_department_option(page, name, *, timeout=8.0, poll=0.5):
         time.sleep(poll)
 
 
+def clear_filters(page, debug=False):
+    """Clear every active coupon facet. Return False if a clear click fails."""
+    success = True
+    try:
+        clear_all = page.get_by_role("button", name="Clear All")
+        for i in range(clear_all.count()):
+            try:
+                btn = clear_all.nth(i)
+                if btn.is_visible() and btn.is_enabled():
+                    btn.click()
+                    human_pause(0.3, 0.6)
+            except Exception as e:
+                success = False
+                log(f"  could not clear a coupon filter: {e}", debug=debug,
+                    is_debug_only=True)
+    except Exception as e:
+        log(f"  could not inspect coupon filters: {e}", debug=debug,
+            is_debug_only=True)
+        return False
+    return success
+
+
 def select_departments(page, wanted, debug=False):
     """Tick the requested departments in the left Departments panel.
 
@@ -365,15 +394,7 @@ def select_departments(page, wanted, debug=False):
             is_debug_only=True)
 
     # Reset any previously-applied filters (one "Clear All" per facet section).
-    clear_all = page.get_by_role("button", name="Clear All")
-    for i in range(clear_all.count()):
-        try:
-            btn = clear_all.nth(i)
-            if btn.is_visible() and btn.is_enabled():
-                btn.click()
-                human_pause(0.3, 0.6)
-        except Exception:
-            pass
+    clear_filters(page, debug=debug)
 
     matched, missing = [], []
     for name in wanted:
@@ -397,12 +418,13 @@ def select_departments(page, wanted, debug=False):
     return matched, missing
 
 
-def _clip_relevant(page, cfg, budget, args):
-    """Clip the highest-value coupons in the filtered list, up to `budget`.
+def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
+                   min_savings=None, include_nondollar=None, phase="preferred"):
+    """Clip the highest-value coupons in the current list, up to `budget`.
 
     Re-collects + re-ranks each pass (clicking mutates the DOM). Stops on
     budget exhaustion, no progress, or a detected account-limit condition.
-    Returns an exit code (0 ok, 4 = hit account limit early).
+    Returns counts and the reason it stopped as a ClipResult.
 
     Limit handling: stops if QFC shows a visible "limit/maximum reached" message.
     A click that silently no-ops (no such message) is not separately detected, but
@@ -412,24 +434,35 @@ def _clip_relevant(page, cfg, budget, args):
     """
     clipped = 0
     limit_hit = False
-    clicked_keys = set()   # coupons clicked this run (by label) — never re-click;
-                           # QFC flips the button to "Unclip" asynchronously, so a
-                           # just-clicked coupon can still look clippable next pass
+    rescanned_after_stall = False
+    if clicked_keys is None:
+        clicked_keys = set()
+    if min_savings is None:
+        min_savings = cfg.min_savings
+    if include_nondollar is None:
+        include_nondollar = cfg.include_nondollar
     while clipped < budget and not limit_hit:
         dismiss_modal(page, debug=args.debug)
         ranked = rank_candidates(
             collect_candidates(page, cfg.estimates, debug=(args.debug and clipped == 0)),
-            min_savings=cfg.min_savings, include_nondollar=cfg.include_nondollar)
+            min_savings=min_savings, include_nondollar=include_nondollar)
         if not ranked:
+            if not rescanned_after_stall:
+                scroll_to_load_all(page, debug=args.debug)
+                rescanned_after_stall = True
+                continue
             break
 
         if args.dry_run:
-            log(f"\n[dry-run] plan ({min(len(ranked), budget)} of {len(ranked)} "
-                f"within budget {budget}):")
-            for c in ranked[:budget]:
+            plan = [c for c in ranked if c.label not in clicked_keys][:budget]
+            log(f"\n[dry-run] {phase} plan ({len(plan)} of {len(ranked)} "
+                f"within remaining capacity {budget}):")
+            for c in plan:
                 est = " (est)" if c.savings.estimated else ""
                 log(f"  ${c.savings.value:>6.2f}{est:<6} {c.savings.kind:<7} {c.label!r}")
-            return 0
+                clicked_keys.add(c.label)
+            return ClipResult(clipped=0, planned=len(plan),
+                              exhausted=len(plan) < budget)
 
         progressed = False
         for c in ranked:
@@ -446,7 +479,8 @@ def _clip_relevant(page, cfg, budget, args):
                 clicked_keys.add(c.label)
                 clipped += 1
                 progressed = True
-                log(f"  clipped ({clipped}/{budget}) ${c.savings.value:.2f}: {c.label!r}")
+                log(f"  {phase} clipped ({clipped}/{budget}) "
+                    f"${c.savings.value:.2f}: {c.label!r}")
                 human_pause(args.min_delay, args.max_delay)
             except Exception as e:
                 log(f"  skip {c.label!r}: {e}", debug=args.debug, is_debug_only=True)
@@ -462,14 +496,99 @@ def _clip_relevant(page, cfg, budget, args):
             except Exception:
                 pass
         if not progressed:
+            if not rescanned_after_stall:
+                scroll_to_load_all(page, debug=args.debug)
+                rescanned_after_stall = True
+                continue
             break
+        rescanned_after_stall = False
         human_pause(1.5, 2.5)
 
+    return ClipResult(clipped=clipped, exhausted=clipped < budget and not limit_hit,
+                      limit_hit=limit_hit)
+
+
+def _load_full_coupon_list(page, args):
+    scroll_to_load_all(page, debug=args.debug)
+    page.mouse.wheel(0, -100000)
+    human_pause(1.0, 2.0)
+
+
+def _run_relevance_mode(page, cfg, args):
+    """Clip preferred departments first, then optionally fill unused capacity."""
+    if not clear_filters(page, debug=args.debug):
+        log("ERROR: could not clear persisted coupon filters; account-wide "
+            "capacity cannot be calculated safely.")
+        return 3
+
+    log("Loading the unfiltered coupon list to calculate remaining capacity...")
+    _load_full_coupon_list(page, args)
+    n_clip, n_clipped = scan_coupon_buttons(page)
+    log(f"Unfiltered page state: {n_clip} clippable, {n_clipped} already-clipped "
+        "coupon(s) visible.")
+    if n_clip == 0 and n_clipped == 0 and getattr(args, "no_wait_login", False):
+        log("Scheduled run found no coupons; exiting with status 2.")
+        return 2
+
+    already = count_clipped_total(page, debug=args.debug)
+    budget = max(0, cfg.max_clips - already)
+    log(f"Remaining capacity: {budget} (cap {cfg.max_clips} - "
+        f"{already} already clipped)")
+    if budget == 0:
+        log("Already at the configured clip cap; nothing to do.")
+        return 0
+
+    matched, missing = select_departments(page, cfg.departments, debug=args.debug)
+    if missing:
+        log(f"WARNING: these configured departments were not found: {missing}")
+    if not matched:
+        log("ERROR: none of the configured departments matched the panel; "
+            "aborting (set departments to valid names).")
+        return 3
+    log(f"Preferred departments selected: {matched}")
+
+    log("Loading preferred coupons...")
+    _load_full_coupon_list(page, args)
+    clicked_keys = set()
+    preferred = _clip_relevant(
+        page, cfg, budget, args, clicked_keys=clicked_keys,
+        min_savings=cfg.min_savings,
+        include_nondollar=cfg.include_nondollar,
+        phase="preferred")
+    preferred_used = preferred.planned if args.dry_run else preferred.clipped
+    total_used = preferred_used
+    limit_hit = preferred.limit_hit
+
+    remaining = max(0, budget - total_used)
+    if cfg.fill_to_limit and remaining and not limit_hit:
+        log(f"Preferred coupons exhausted with {remaining} capacity remaining; "
+            "clearing filters to fill it.")
+        if not clear_filters(page, debug=args.debug):
+            log("WARNING: could not clear department filters; stopping before "
+                "the fill phase.")
+            return 5
+        _load_full_coupon_list(page, args)
+        fill = _clip_relevant(
+            page, cfg, remaining, args, clicked_keys=clicked_keys,
+            min_savings=0.0, include_nondollar=True, phase="fill")
+        total_used += fill.planned if args.dry_run else fill.clipped
+        limit_hit = fill.limit_hit
+
     log("\n" + "-" * 40)
-    log(f"Done. Clipped {clipped} relevant coupon(s)"
-        f"{' (account limit reached)' if limit_hit else ''}.")
-    human_pause(5, 5)
-    return 4 if limit_hit and clipped == 0 else 0
+    if args.dry_run:
+        log(f"Dry run complete. Planned {total_used} coupon(s) against "
+            f"{budget} remaining capacity.")
+    elif limit_hit:
+        log(f"Done. Clipped {total_used} coupon(s); QFC reported its account limit.")
+    elif total_used >= budget:
+        log(f"Done. Clipped {total_used} coupon(s); configured capacity reached.")
+    elif not cfg.fill_to_limit:
+        log(f"Done. Clipped {total_used} coupon(s); preferred coupons were "
+            f"exhausted with {budget - total_used} capacity remaining.")
+    else:
+        log(f"Done. Clipped {total_used} coupon(s); all available coupons "
+            f"were exhausted with {budget - total_used} capacity remaining.")
+    return 4 if limit_hit and total_used == 0 else 0
 
 
 def main():
@@ -536,27 +655,13 @@ def main():
         # Close any modal that may be open before we start.
         dismiss_modal(page, debug=args.debug)
 
-        # --- relevance mode: filter by department, rank by savings -----------
+        # --- relevance mode: prefer configured departments, optionally fill --
         if relevance_mode:
-            matched, missing = select_departments(page, cfg.departments,
-                                                  debug=args.debug)
-            if missing:
-                log(f"WARNING: these configured departments were not found: "
-                    f"{missing}")
-            if not matched:
-                log("ERROR: none of the configured departments matched the "
-                    "panel; aborting (set departments to valid names).")
-                ctx.close()
-                return 3
-            log(f"Departments selected: {matched}")
-
-            already = count_clipped_total(page, debug=args.debug)
-            budget = max(0, cfg.max_clips - already)
-            log(f"Budget: {budget} (cap {cfg.max_clips} - {already} already clipped)")
-            if budget == 0:
-                log("Already at the clip cap; nothing to do.")
-                ctx.close()
-                return 0
+            rc = _run_relevance_mode(page, cfg, args)
+            log("Closing in 5 seconds...")
+            human_pause(5, 5)
+            ctx.close()
+            return rc
 
         log("Loading the full coupon list (scrolling)...")
         scroll_to_load_all(page, debug=args.debug)
@@ -584,11 +689,6 @@ def main():
                 log("Scheduled run can't proceed; exiting with status 2.")
                 ctx.close()
                 return 2
-
-        if relevance_mode:
-            rc = _clip_relevant(page, cfg, budget, args)
-            ctx.close()
-            return rc
 
         clipped = 0
         rounds = 0
