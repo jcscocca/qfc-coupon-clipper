@@ -57,9 +57,9 @@ COUPONS_URL = "https://www.qfc.com/savings/cl/coupons/"
 PROFILE_DIR = Path.home() / ".qfc_clipper_profile"
 
 # Accessible-name fragments (lowercase) that identify an UN-clipped coupon's
-# action button. Matched case-insensitively as substrings.
-# NOTE: QFC labels these "Clip for coupon: ...". We also require the word
-# "coupon" to be present (see looks_clippable) so we only match coupon tiles.
+# action button. Matched case-insensitively as substrings via looks_clippable.
+# QFC's current labels are "Clip for coupon: ..."; the shorter fragments below
+# are legacy fallbacks in case that wording changes.
 CLIP_TEXTS = ["clip for coupon", "clip", "add coupon", "load coupon", "add to card"]
 
 # Fragments that mean the coupon is ALREADY clipped -> skip it.
@@ -199,9 +199,12 @@ def warn_no_coupons(page):
     log("*" * 64)
 
 
-def scan_coupon_buttons(page):
-    """Return (n_clippable, n_clipped) over all buttons currently on the page."""
-    n_clip = n_clipped = 0
+def _iter_button_labels(page):
+    """Yield (locator, label) for every on-page button with a non-empty label.
+
+    Shared iterator for the three coupon-button scanners (scan/collect_buttons/
+    collect_candidates) so aria-label extraction stays defined in one place.
+    """
     buttons = page.get_by_role("button")
     for i in range(buttons.count()):
         b = buttons.nth(i)
@@ -209,8 +212,14 @@ def scan_coupon_buttons(page):
             label = (b.get_attribute("aria-label") or b.inner_text() or "").strip()
         except Exception:
             continue
-        if not label:
-            continue
+        if label:
+            yield b, label
+
+
+def scan_coupon_buttons(page):
+    """Return (n_clippable, n_clipped) over all buttons currently on the page."""
+    n_clip = n_clipped = 0
+    for _, label in _iter_button_labels(page):
         if looks_clipped(label):
             n_clipped += 1
         elif looks_clippable(label):
@@ -247,17 +256,8 @@ def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
 def collect_buttons(page, debug=False):
     """Return a list of (locator, label) for candidate buttons on the page."""
     candidates = []
-    buttons = page.get_by_role("button")
-    count = buttons.count()
     seen_labels = {}
-    for i in range(count):
-        b = buttons.nth(i)
-        try:
-            label = (b.get_attribute("aria-label") or b.inner_text() or "").strip()
-        except Exception:
-            continue
-        if not label:
-            continue
+    for b, label in _iter_button_labels(page):
         if debug:
             seen_labels[label] = seen_labels.get(label, 0) + 1
         if looks_clippable(label):
@@ -277,14 +277,8 @@ def collect_candidates(page, estimates: Estimates, debug=False):
     but that blob contains unrelated dollar figures that swamped the real value
     (every coupon came out as the same number)."""
     candidates = []
-    buttons = page.get_by_role("button")
-    for i in range(buttons.count()):
-        b = buttons.nth(i)
-        try:
-            label = (b.get_attribute("aria-label") or b.inner_text() or "").strip()
-        except Exception:
-            continue
-        if not label or not looks_clippable(label):
+    for b, label in _iter_button_labels(page):
+        if not looks_clippable(label):
             continue
         candidates.append(
             Candidate(label=label, savings=parse_savings(label, estimates),

@@ -126,6 +126,58 @@ def test_limit_regex_ignores_ordinary_coupon_text(msg):
     assert clipper._LIMIT_RE.search(msg) is None
 
 
+# --- _iter_button_labels: shared button-iteration helper --------------------
+
+class _FakeLabelBtn:
+    def __init__(self, aria=None, inner="", raises=False):
+        self._aria = aria
+        self._inner = inner
+        self._raises = raises
+
+    def get_attribute(self, name):
+        if self._raises:
+            raise RuntimeError("stale element")
+        return self._aria
+
+    def inner_text(self):
+        return self._inner
+
+
+class _FakeButtons:
+    def __init__(self, buttons):
+        self._buttons = buttons
+
+    def count(self):
+        return len(self._buttons)
+
+    def nth(self, i):
+        return self._buttons[i]
+
+
+class _IterPage:
+    def __init__(self, buttons):
+        self._buttons = _FakeButtons(buttons)
+
+    def get_by_role(self, role):
+        return self._buttons
+
+
+def test_iter_button_labels_skips_empty_and_errors():
+    """Contract: empty labels dropped, exception-raising buttons skipped,
+    aria-label wins over inner_text, whitespace trimmed."""
+    a = _FakeLabelBtn(aria="Clip for coupon: eggs")
+    b = _FakeLabelBtn(aria="", inner="  Add to card  ")   # inner falls back, trimmed
+    c = _FakeLabelBtn(aria="", inner="")                  # both empty -> skipped
+    d = _FakeLabelBtn(raises=True)                        # errors -> skipped
+    e = _FakeLabelBtn(aria="Unclip")
+    got = list(clipper._iter_button_labels(_IterPage([a, b, c, d, e])))
+    assert [(loc, label) for loc, label in got] == [
+        (a, "Clip for coupon: eggs"),
+        (b, "Add to card"),
+        (e, "Unclip"),
+    ]
+
+
 # --- wait_until_ready -------------------------------------------------------
 
 def _patch_ready(monkeypatch, scan_results, logged_out=False):
