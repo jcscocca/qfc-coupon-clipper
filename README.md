@@ -67,9 +67,9 @@ python qfc_coupon_clipper.py
 
 ## Clipping only relevant coupons (departments + savings)
 
-By default the clipper clips every coupon. QFC caps an account at 150 active
-coupons, so to spend that budget well you can restrict it to the departments you shop
-and let it prioritize the highest-savings coupons.
+By default the clipper does not assume a QFC account limit. To prioritize the most
+useful offers first, you can restrict the first pass to departments you shop and
+then fill the remaining slots in QFC's relevance/popularity order.
 
 ```bash
 cp config.example.toml config.toml      # then edit it
@@ -77,22 +77,25 @@ cp config.example.toml config.toml      # then edit it
 
 - `departments` — uncomment the aisles you shop (names must match QFC's left panel
   exactly). **Empty = clip everything (legacy behavior).**
-- `max_clips` — cap (default 150); the script subtracts already-clipped coupons.
+- `max_clips` — optional account-wide ceiling; `0` (default) means no assumed cap,
+  so QFC's own response or the available coupon list determines when to stop.
 - `min_savings` — optional floor; skip coupons below this value.
 - `include_nondollar` / `[estimates]` — BOGO and `% off` coupons get an assumed
   dollar value so they rank fairly (a BOGO defaults to $5, beating small coupons).
 - `fill_to_limit` — when `true`, clip configured departments first, then clear the
   filters and clip the unfiltered list from the top down, preserving QFC's
-  relevance/popularity order, until `max_clips` is reached.
+  relevance/popularity order, until an optional `max_clips` ceiling, QFC's actual
+  limit, or the available coupon list is reached.
 
 A coupon is counted only after its button changes to QFC's clipped state. Repeated
 unconfirmed clicks stop the run instead of inflating the success total. The default
 pace stays below the site's observed burst threshold; lowering the delays can cause
 QFC to silently reject otherwise valid clips.
 
-Progress such as `30/60` means 30 coupons clipped from an estimated **remaining
-account capacity** of 60; it does not mean the page contained exactly 60 eligible
-coupons. Capacity is counted from the fully loaded, unfiltered coupon list.
+With a positive `max_clips`, progress such as `30/60` means 30 confirmed clips from
+an estimated remaining configured capacity of 60. With `max_clips = 0`, the run uses
+the fully loaded, unfiltered list as its working budget and lets QFC enforce any
+actual account limit.
 
 Preview before clipping — prints the ranked plan with `(est)` markers, clips nothing:
 

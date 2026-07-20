@@ -663,11 +663,19 @@ def _run_relevance_mode(page, cfg, args):
             return 2
 
     already = n_clipped
-    account_remaining = max(0, cfg.max_clips - already)
+    if cfg.max_clips > 0:
+        account_remaining = max(0, cfg.max_clips - already)
+        log(f"Remaining configured capacity: {account_remaining} "
+            f"(cap {cfg.max_clips} - {already} already clipped)")
+    else:
+        # There is no reliable published account cap. Use the number of
+        # currently clippable controls as a finite run budget and let QFC's
+        # confirmed state/limit response be authoritative.
+        account_remaining = n_clip
+        log(f"No configured account cap; {account_remaining} coupon(s) are "
+            "currently clippable.")
     run_limit = getattr(args, "max", 0)
     budget = min(account_remaining, run_limit) if run_limit else account_remaining
-    log(f"Remaining capacity: {account_remaining} (cap {cfg.max_clips} - "
-        f"{already} already clipped)")
     if run_limit and budget < account_remaining:
         log(f"This run is limited to {budget} confirmed coupon(s) by --max.")
     if budget == 0:
@@ -726,8 +734,11 @@ def _run_relevance_mode(page, cfg, args):
     elif confirmation_blocked:
         log(f"Stopped. Confirmed {total_used} coupon(s); QFC failed to confirm "
             f"{failed} attempted clip(s). Try again later.")
-    elif total_used >= budget:
+    elif cfg.max_clips > 0 and total_used >= budget:
         log(f"Done. Clipped {total_used} coupon(s); configured capacity reached.")
+    elif total_used >= budget:
+        log(f"Done. Clipped {total_used} coupon(s); all coupons that were "
+            "available at the start of the run were processed.")
     elif fill_skipped:
         log(f"Done. Clipped {total_used} coupon(s); could not clear filters, so "
             f"the fill phase was skipped ({budget - total_used} capacity unused).")

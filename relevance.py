@@ -100,7 +100,7 @@ def match_departments(wanted: list[str], available: list[str]) -> tuple[list[str
 @dataclass
 class Config:
     departments: list = field(default_factory=list)
-    max_clips: int = 150
+    max_clips: int = 0
     min_savings: float = 0.0
     include_nondollar: bool = True
     fill_to_limit: bool = False
@@ -120,7 +120,7 @@ def load_config(path: "str | Path | None", overrides: "dict | None" = None) -> C
     est = data.get("estimates", {})
     cfg = Config(
         departments=list(data.get("departments", [])),
-        max_clips=int(data.get("max_clips", 150)),
+        max_clips=int(data.get("max_clips", 0)),
         min_savings=float(data.get("min_savings", 0.0)),
         include_nondollar=bool(data.get("include_nondollar", True)),
         fill_to_limit=bool(data.get("fill_to_limit", False)),

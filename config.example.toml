@@ -38,8 +38,9 @@ departments = [
   # "Tobacco",
 ]
 
-# Cap on clips, accounting for already-clipped coupons (relevance mode only).
-max_clips = 150
+# Optional account-wide ceiling, accounting for already-clipped coupons.
+# 0 = no assumed QFC limit; keep clipping until QFC rejects or coupons run out.
+max_clips = 0
 
 # Skip coupons whose (estimated) value is below this. 0 = no floor.
 min_savings = 0.0
@@ -48,7 +49,8 @@ min_savings = 0.0
 include_nondollar = true
 
 # After preferred departments are exhausted, clear filters and keep clipping the
-# coupons in QFC's existing top-to-bottom order until max_clips or the account limit.
+# coupons in QFC's existing top-to-bottom order until the optional configured
+# ceiling, QFC's actual account limit, or the available coupons are exhausted.
 fill_to_limit = false
 
 [estimates]

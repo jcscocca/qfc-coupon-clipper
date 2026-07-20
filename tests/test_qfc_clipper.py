@@ -663,6 +663,36 @@ def test_relevance_mode_max_limits_confirmed_coupons_for_this_run(
     assert "limited to 3 confirmed coupon(s)" in capsys.readouterr().out
 
 
+def test_relevance_mode_without_assumed_cap_uses_clippable_count(
+        monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    budgets = []
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (7, 100))
+    monkeypatch.setattr(clipper, "select_departments",
+                        lambda page, wanted, debug=False: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    def fake_clip(page, cfg, budget, args, **kwargs):
+        budgets.append(budget)
+        return clipper.ClipResult(clipped=budget, exhausted=False)
+
+    monkeypatch.setattr(clipper, "_clip_relevant", fake_clip)
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=0, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=False, estimates=None)
+    args = SimpleNamespace(
+        dry_run=False, debug=False, min_delay=0, max_delay=0, max=0)
+
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 0
+    assert budgets == [7]
+    assert "No configured account cap" in capsys.readouterr().out
+
+
 def test_relevance_mode_without_fill_reports_preferred_exhaustion(
         monkeypatch, capsys):
     from types import SimpleNamespace
