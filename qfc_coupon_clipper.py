@@ -63,7 +63,7 @@ PROFILE_DIR = Path.home() / ".qfc_clipper_profile"
 CLIP_TEXTS = ["clip for coupon", "clip", "add coupon", "load coupon", "add to card"]
 
 # Fragments that mean the coupon is ALREADY clipped -> skip it.
-CLIPPED_TEXTS = ["clipped", "unclip", "added", "remove coupon"]
+CLIPPED_TEXTS = ["clipped", "unclip", "added", "remove coupon", "you clipped"]
 
 # On-page text meaning QFC cut us off at the account clip limit. fill_to_limit
 # clips toward the cap, so this is the primary guard against over-clipping: it
@@ -85,6 +85,8 @@ class ClipResult:
     exhausted: bool
     limit_hit: bool = False
     planned: int = 0
+    failed: int = 0
+    confirmation_blocked: bool = False
 
 
 def log(msg, *, debug=False, is_debug_only=False):
@@ -154,15 +156,17 @@ def dismiss_modal(page, debug=False):
 
 
 def looks_clipped(label: str) -> bool:
-    label = (label or "").lower()
-    return any(t in label for t in CLIPPED_TEXTS)
+    label = (label or "").strip().lower()
+    # These are action labels, so match the beginning. A substring match makes
+    # an unclipped product such as "Clip ... no sugar added" look pre-clipped.
+    return any(label.startswith(t) for t in CLIPPED_TEXTS)
 
 
 def looks_clippable(label: str) -> bool:
-    label = (label or "").lower()
+    label = (label or "").strip().lower()
     if looks_clipped(label):
         return False
-    return any(t in label for t in CLIP_TEXTS)
+    return any(label.startswith(t) for t in CLIP_TEXTS)
 
 
 def detect_logged_out(page) -> bool:
@@ -216,6 +220,68 @@ def _iter_button_labels(page):
             yield b, label
 
 
+_COUPON_ACTION_PREFIX_RE = re.compile(
+    r"^(?:clip(?:ped)?(?:\s+for)?(?:\s+coupon)?"
+    r"|unclip(?:\s+for)?(?:\s+coupon)?"
+    r"|add(?:ed)?(?:\s+coupon|\s+to\s+card)?|load(?:ed)?(?:\s+coupon)?"
+    r"|remove(?:\s+coupon)?)\s*:?\s*",
+    re.I,
+)
+
+
+def _coupon_key(label: str) -> str:
+    """Return the stable portion of a coupon action label.
+
+    QFC changes labels such as ``Clip for coupon: Save $1 ...`` to
+    ``Unclip for coupon: Save $1 ...`` after a successful request. Removing that
+    action prefix lets confirmation match the before and after controls.
+    """
+    remainder = _COUPON_ACTION_PREFIX_RE.sub("", label or "")
+    return " ".join(remainder.lower().split())
+
+
+def _wait_for_clip_confirmation(page, locator, original_label, *,
+                                timeout=6.0, poll=0.25):
+    """Wait until QFC exposes the clicked coupon in its clipped state.
+
+    Playwright's ``click`` only confirms browser event dispatch; it says nothing
+    about whether QFC accepted the request. Prefer the original control's updated
+    label, then rescan once for a replacement control after a React re-render.
+    """
+    key = _coupon_key(original_label)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            # The locator was created from the old accessible name. Once QFC
+            # renames it to "Unclip for coupon", waiting on that stale selector
+            # for Playwright's 30-second default obscures a successful request.
+            current = (locator.get_attribute("aria-label", timeout=250)
+                       or locator.inner_text(timeout=250) or "").strip()
+            if looks_clipped(current) and _coupon_key(current) == key:
+                return True
+        except Exception:
+            pass
+        try:
+            if any(
+                looks_clipped(label) and _coupon_key(label) == key
+                for _, label in _iter_button_labels(page)
+            ):
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+
+
+def _visible_limit_warning(page):
+    try:
+        warn = page.get_by_text(_LIMIT_RE)
+        return bool(warn.count() and warn.first.is_visible())
+    except Exception:
+        return False
+
+
 def scan_coupon_buttons(page):
     """Return (n_clippable, n_clipped) over all buttons currently on the page."""
     n_clip = n_clipped = 0
@@ -225,6 +291,23 @@ def scan_coupon_buttons(page):
         elif looks_clippable(label):
             n_clip += 1
     return n_clip, n_clipped
+
+
+def _stable_coupon_button(page, label, fallback):
+    """Resolve a coupon action by its exact accessible name at click time.
+
+    Locators returned by ``buttons.nth(i)`` are index queries, not element
+    handles. QFC re-renders the grid after filters and clips, so the same index
+    can later point at a coupon image or "Shop All Items" button. An exact-name
+    locator remains tied to the intended action across those re-renders.
+    """
+    try:
+        exact = page.get_by_role("button", name=label, exact=True)
+        if exact.count():
+            return exact.first
+    except Exception:
+        pass
+    return fallback
 
 
 def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
@@ -261,7 +344,7 @@ def collect_buttons(page, debug=False):
         if debug:
             seen_labels[label] = seen_labels.get(label, 0) + 1
         if looks_clippable(label):
-            candidates.append((b, label))
+            candidates.append((_stable_coupon_button(page, label, b), label))
     if debug:
         log("  [debug] distinct button labels seen on page:", debug=debug)
         for lbl, n in sorted(seen_labels.items(), key=lambda x: -x[1])[:40]:
@@ -282,7 +365,7 @@ def collect_candidates(page, estimates: Estimates, debug=False):
             continue
         candidates.append(
             Candidate(label=label, savings=parse_savings(label, estimates),
-                      locator=b)
+                      locator=_stable_coupon_button(page, label, b))
         )
     if debug:
         for c in candidates[:40]:
@@ -403,17 +486,29 @@ def select_departments(page, wanted, debug=False):
 
     matched, missing = [], []
     for name in wanted:
-        try:
-            target = _find_department_option(page, name)
-            if target is None:
-                missing.append(name)
-                continue
-            target.scroll_into_view_if_needed(timeout=3000)
-            target.click()
-            human_pause(0.4, 0.8)
+        selected = False
+        last_error = None
+        # Every filter click re-renders the panel. Re-resolve a detached row
+        # instead of permanently losing that department to the render race.
+        for _ in range(3):
+            try:
+                target = _find_department_option(page, name)
+                if target is None:
+                    break
+                target.scroll_into_view_if_needed(timeout=3000)
+                target.click()
+                human_pause(0.4, 0.8)
+                selected = True
+                break
+            except Exception as e:
+                last_error = e
+                human_pause(0.2, 0.4)
+        if selected:
             matched.append(name)
-        except Exception as e:
-            log(f"  could not select {name!r}: {e}", debug=debug, is_debug_only=True)
+        else:
+            if last_error is not None:
+                log(f"  could not select {name!r}: {last_error}", debug=debug,
+                    is_debug_only=True)
             missing.append(name)
 
     human_pause(1.0, 2.0)  # let the filtered list refresh
@@ -437,14 +532,15 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
     budget exhaustion, no progress, or a detected account-limit condition.
     Returns counts and the reason it stopped as a ClipResult.
 
-    Limit handling: stops if QFC shows a visible "limit/maximum reached" message.
-    A click that silently no-ops (no such message) is not separately detected, but
-    the account cap is still respected — an ineffective click changes nothing on the
-    account and the no-progress guard ends the run. (Spec §9's separate "no
-    transition" detection is deferred.)
+    A click counts only after QFC changes the coupon control to its clipped state.
+    Three consecutive unconfirmed clicks stop the phase, which avoids hammering a
+    rate-limited or otherwise rejecting endpoint and reporting false successes.
     """
     clipped = 0
+    failed = 0
     limit_hit = False
+    confirmation_blocked = False
+    consecutive_unconfirmed = 0
     stall_rescans = 0
     if clicked_keys is None:
         clicked_keys = set()
@@ -454,9 +550,16 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
         include_nondollar = cfg.include_nondollar
     while clipped < budget and not limit_hit:
         dismiss_modal(page, debug=args.debug)
-        ranked = rank_candidates(
-            collect_candidates(page, cfg.estimates, debug=(args.debug and clipped == 0)),
-            min_savings=min_savings, include_nondollar=include_nondollar)
+        candidates = collect_candidates(
+            page, cfg.estimates, debug=(args.debug and clipped == 0))
+        if phase == "fill":
+            # The unfiltered page is already sorted by QFC relevance/popularity.
+            # Preserve that order instead of replacing it with savings ranking.
+            ranked = candidates
+        else:
+            ranked = rank_candidates(
+                candidates, min_savings=min_savings,
+                include_nondollar=include_nondollar)
         if not ranked:
             if stall_rescans < _STALL_RESCANS:
                 scroll_to_load_all(page, debug=args.debug)
@@ -488,23 +591,35 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
                 human_pause(0.3, 0.8)
                 c.locator.click(timeout=5000)
                 clicked_keys.add(c.label)
-                clipped += 1
-                progressed = True
-                log(f"  {phase} clipped ({clipped}/{budget}) "
-                    f"${c.savings.value:.2f}: {c.label!r}")
+                if _visible_limit_warning(page):
+                    log("Reached QFC's account clip limit; stopping.")
+                    limit_hit = True
+                    break
+                if _wait_for_clip_confirmation(page, c.locator, c.label):
+                    clipped += 1
+                    progressed = True
+                    consecutive_unconfirmed = 0
+                    log(f"  {phase} confirmed ({clipped}/{budget}) "
+                        f"${c.savings.value:.2f}: {c.label!r}")
+                else:
+                    failed += 1
+                    consecutive_unconfirmed += 1
+                    log(f"  WARNING: QFC did not confirm this clip "
+                        f"({consecutive_unconfirmed}/3); not counted: {c.label!r}")
+                    if consecutive_unconfirmed >= 3:
+                        log("QFC stopped confirming coupon clips; stopping to avoid "
+                            "false successes or further rate limiting.")
+                        confirmation_blocked = True
+                        break
+                # Pace the next request only after observing the current result.
+                # QFC may remove/re-render a successfully clipped tile quickly,
+                # so sleeping before confirmation misses its short-lived state.
                 human_pause(args.min_delay, args.max_delay)
             except Exception as e:
                 log(f"  skip {c.label!r}: {e}", debug=args.debug, is_debug_only=True)
                 dismiss_modal(page, debug=args.debug)
-            # limit safety net: a visible 'limit/maximum reached' message.
-            try:
-                warn = page.get_by_text(_LIMIT_RE)
-                if warn.count() and warn.first.is_visible():
-                    log("Reached QFC's account clip limit; stopping.")
-                    limit_hit = True
-                    break
-            except Exception:
-                pass
+        if confirmation_blocked:
+            break
         if not progressed:
             if stall_rescans < _STALL_RESCANS:
                 scroll_to_load_all(page, debug=args.debug)
@@ -514,8 +629,13 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
         stall_rescans = 0
         human_pause(1.5, 2.5)
 
-    return ClipResult(clipped=clipped, exhausted=clipped < budget and not limit_hit,
-                      limit_hit=limit_hit)
+    return ClipResult(
+        clipped=clipped,
+        exhausted=clipped < budget and not limit_hit and not confirmation_blocked,
+        limit_hit=limit_hit,
+        failed=failed,
+        confirmation_blocked=confirmation_blocked,
+    )
 
 
 def _load_full_coupon_list(page, args):
@@ -543,9 +663,21 @@ def _run_relevance_mode(page, cfg, args):
             return 2
 
     already = n_clipped
-    budget = max(0, cfg.max_clips - already)
-    log(f"Remaining capacity: {budget} (cap {cfg.max_clips} - "
-        f"{already} already clipped)")
+    if cfg.max_clips > 0:
+        account_remaining = max(0, cfg.max_clips - already)
+        log(f"Remaining configured capacity: {account_remaining} "
+            f"(cap {cfg.max_clips} - {already} already clipped)")
+    else:
+        # There is no reliable published account cap. Use the number of
+        # currently clippable controls as a finite run budget and let QFC's
+        # confirmed state/limit response be authoritative.
+        account_remaining = n_clip
+        log(f"No configured account cap; {account_remaining} coupon(s) are "
+            "currently clippable.")
+    run_limit = getattr(args, "max", 0)
+    budget = min(account_remaining, run_limit) if run_limit else account_remaining
+    if run_limit and budget < account_remaining:
+        log(f"This run is limited to {budget} confirmed coupon(s) by --max.")
     if budget == 0:
         log("Already at the configured clip cap; nothing to do.")
         return 0
@@ -570,10 +702,13 @@ def _run_relevance_mode(page, cfg, args):
     preferred_used = preferred.planned if args.dry_run else preferred.clipped
     total_used = preferred_used
     limit_hit = preferred.limit_hit
+    failed = preferred.failed
+    confirmation_blocked = preferred.confirmation_blocked
 
     fill_skipped = False
     remaining = max(0, budget - total_used)
-    if cfg.fill_to_limit and remaining and not limit_hit:
+    if (cfg.fill_to_limit and remaining and not limit_hit
+            and not confirmation_blocked):
         log(f"Preferred coupons exhausted with {remaining} capacity remaining; "
             "clearing filters to fill it.")
         if not clear_filters(page, debug=args.debug):
@@ -587,6 +722,8 @@ def _run_relevance_mode(page, cfg, args):
                 min_savings=0.0, include_nondollar=True, phase="fill")
             total_used += fill.planned if args.dry_run else fill.clipped
             limit_hit = fill.limit_hit
+            failed += fill.failed
+            confirmation_blocked = fill.confirmation_blocked
 
     log("\n" + "-" * 40)
     if args.dry_run:
@@ -594,8 +731,14 @@ def _run_relevance_mode(page, cfg, args):
             f"{budget} remaining capacity.")
     elif limit_hit:
         log(f"Done. Clipped {total_used} coupon(s); QFC reported its account limit.")
-    elif total_used >= budget:
+    elif confirmation_blocked:
+        log(f"Stopped. Confirmed {total_used} coupon(s); QFC failed to confirm "
+            f"{failed} attempted clip(s). Try again later.")
+    elif cfg.max_clips > 0 and total_used >= budget:
         log(f"Done. Clipped {total_used} coupon(s); configured capacity reached.")
+    elif total_used >= budget:
+        log(f"Done. Clipped {total_used} coupon(s); all coupons that were "
+            "available at the start of the run were processed.")
     elif fill_skipped:
         log(f"Done. Clipped {total_used} coupon(s); could not clear filters, so "
             f"the fill phase was skipped ({budget - total_used} capacity unused).")
@@ -605,7 +748,10 @@ def _run_relevance_mode(page, cfg, args):
     else:
         log(f"Done. Clipped {total_used} coupon(s); all available coupons "
             f"were exhausted with {budget - total_used} capacity remaining.")
-    return 4 if limit_hit and total_used == 0 else 0
+    if failed and not confirmation_blocked:
+        log(f"NOTE: {failed} attempted coupon(s) were not confirmed and were "
+            "not included in the clipped total.")
+    return 4 if ((limit_hit or confirmation_blocked) and total_used == 0) else 0
 
 
 def main():
@@ -615,10 +761,10 @@ def main():
                     help="find clip buttons but do not click them")
     ap.add_argument("--max", type=int, default=0,
                     help="stop after clipping this many (0 = no limit)")
-    ap.add_argument("--min-delay", type=float, default=1.2,
-                    help="min seconds between clips (default 1.2)")
-    ap.add_argument("--max-delay", type=float, default=3.0,
-                    help="max seconds between clips (default 3.0)")
+    ap.add_argument("--min-delay", type=float, default=3.2,
+                    help="min seconds between clips (default 3.2)")
+    ap.add_argument("--max-delay", type=float, default=4.2,
+                    help="max seconds between clips (default 4.2)")
     ap.add_argument("--no-wait-login", action="store_true",
                     help="skip the 'press ENTER after login' prompt")
     ap.add_argument("--config", default=None,
@@ -635,8 +781,6 @@ def main():
     if args.departments is not None:
         overrides["departments"] = [d.strip() for d in args.departments.split(",")
                                     if d.strip()]
-    if args.max:  # existing --max maps to max_clips
-        overrides["max_clips"] = args.max
     if args.min_savings is not None:
         overrides["min_savings"] = args.min_savings
     cfg = load_config(config_path, overrides)
@@ -699,6 +843,9 @@ def main():
                 return 2
 
         clipped = 0
+        failed = 0
+        consecutive_unconfirmed = 0
+        attempted_labels = set()
         rounds = 0
         candidates = []
         # Re-collect after each pass: clicking mutates the DOM / removes buttons.
@@ -716,6 +863,8 @@ def main():
                 if args.max and clipped >= args.max:
                     log(f"Reached --max {args.max}; stopping.")
                     break
+                if label in attempted_labels:
+                    continue
                 try:
                     if not b.is_visible():
                         continue
@@ -725,9 +874,25 @@ def main():
                         log(f"  [dry-run] would clip: {label!r}")
                     else:
                         b.click(timeout=5000)
-                        clipped += 1
-                        log(f"  clipped ({clipped}): {label!r}")
-                        progressed = True
+                        attempted_labels.add(label)
+                        if _visible_limit_warning(page):
+                            log("Reached QFC's account clip limit; stopping.")
+                            consecutive_unconfirmed = 3
+                            break
+                        if _wait_for_clip_confirmation(page, b, label):
+                            clipped += 1
+                            consecutive_unconfirmed = 0
+                            log(f"  confirmed ({clipped}): {label!r}")
+                            progressed = True
+                        else:
+                            failed += 1
+                            consecutive_unconfirmed += 1
+                            log(f"  WARNING: QFC did not confirm this clip "
+                                f"({consecutive_unconfirmed}/3); not counted: "
+                                f"{label!r}")
+                            if consecutive_unconfirmed >= 3:
+                                log("QFC stopped confirming coupon clips; stopping.")
+                                break
                         human_pause(args.min_delay, args.max_delay)
                 except Exception as e:
                     log(f"  skip {label!r}: {e}", debug=args.debug, is_debug_only=True)
@@ -738,6 +903,8 @@ def main():
                 break
             if args.max and clipped >= args.max:
                 break
+            if consecutive_unconfirmed >= 3:
+                break
             if not progressed:
                 break
             human_pause(1.5, 2.5)
@@ -746,7 +913,10 @@ def main():
         if args.dry_run:
             log(f"Dry run complete. {len(candidates)} clippable coupon(s) detected.")
         else:
-            log(f"Done. Clipped {clipped} coupon(s) across {rounds} pass(es).")
+            log(f"Done. Confirmed {clipped} coupon(s) across {rounds} pass(es).")
+            if failed:
+                log(f"{failed} attempted coupon(s) were not confirmed and were "
+                    "not included in that total.")
         log("Closing in 5 seconds...")
         human_pause(5, 5)
         ctx.close()

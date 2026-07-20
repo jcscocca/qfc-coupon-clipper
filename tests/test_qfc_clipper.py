@@ -26,6 +26,7 @@ CLIPPED_LABELS = [
 
 NOT_CLIPPED_LABELS = [
     "Clip for coupon: $1.00 off eggs",
+    "Clip for coupon: no sugar added cereal",
     "Add to card",
     "Add coupon",
     "Sign In",
@@ -178,6 +179,28 @@ def test_iter_button_labels_skips_empty_and_errors():
     ]
 
 
+def test_stable_coupon_button_uses_exact_accessible_name():
+    unstable_index_locator = object()
+    stable_named_locator = object()
+
+    class ExactMatch:
+        first = stable_named_locator
+
+        def count(self):
+            return 1
+
+    class Page:
+        def get_by_role(self, role, name=None, exact=False):
+            assert (role, name, exact) == (
+                "button", "Clip for coupon: eggs", True)
+            return ExactMatch()
+
+    result = clipper._stable_coupon_button(
+        Page(), "Clip for coupon: eggs", unstable_index_locator)
+
+    assert result is stable_named_locator
+
+
 # --- wait_until_ready -------------------------------------------------------
 
 def _patch_ready(monkeypatch, scan_results, logged_out=False):
@@ -267,6 +290,8 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
                         lambda page, debug=False: None)
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
+                        lambda page, locator, label: True)
 
     cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
@@ -301,6 +326,8 @@ def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
     monkeypatch.setattr(clipper, "scroll_to_load_all", fake_scroll)
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
+                        lambda page, locator, label: True)
 
     cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
@@ -338,6 +365,8 @@ def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
     monkeypatch.setattr(clipper, "scroll_to_load_all", fake_scroll)
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
+                        lambda page, locator, label: True)
 
     cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
@@ -364,6 +393,8 @@ def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
                         lambda page, debug=False: None)
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
+                        lambda page, locator, label: True)
 
     cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
@@ -379,6 +410,90 @@ def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
     assert second.clipped == 1
     assert preferred.locator.clicks == 1
     assert fallback.locator.clicks == 1
+
+
+def test_clip_relevant_does_not_count_unconfirmed_clicks(monkeypatch):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    candidates = [
+        Candidate(f"Clip for coupon: item {i}", Savings(1.0, "dollar", False),
+                  _FakeBtn())
+        for i in range(3)
+    ]
+    monkeypatch.setattr(clipper, "collect_candidates",
+                        lambda page, estimates, debug=False: list(candidates))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
+                        lambda page, locator, label: False)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
+
+    assert result.clipped == 0
+    assert result.failed == 3
+    assert result.confirmation_blocked is True
+
+
+def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    candidates = [
+        Candidate("Clip for coupon: first", Savings(0.25, "dollar", False)),
+        Candidate("Clip for coupon: second", Savings(9.00, "dollar", False)),
+    ]
+    monkeypatch.setattr(clipper, "collect_candidates",
+                        lambda page, estimates, debug=False: list(candidates))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(
+        _FakePage(), cfg, budget=2, args=args, phase="fill")
+    out = capsys.readouterr().out
+
+    assert result.planned == 2
+    assert out.index("first") < out.index("second")
+
+
+def test_clip_confirmation_matches_changed_action_prefix():
+    class ConfirmedButton:
+        def get_attribute(self, name, timeout=None):
+            assert name == "aria-label"
+            return "Unclip for coupon: Save $1 on eggs"
+
+        def inner_text(self, timeout=None):
+            return ""
+
+    assert clipper._wait_for_clip_confirmation(
+        _FakePage(), ConfirmedButton(),
+        "Clip for coupon: Save $1 on eggs", timeout=0) is True
+
+
+def test_clip_confirmation_finds_replacement_after_locator_rename():
+    class StaleNamedLocator:
+        def get_attribute(self, name, timeout=None):
+            raise RuntimeError("old accessible name no longer resolves")
+
+        def inner_text(self, timeout=None):
+            raise RuntimeError("old accessible name no longer resolves")
+
+    class ReplacementPage:
+        def get_by_role(self, role):
+            assert role == "button"
+            return _FakeButtons([
+                _FakeLabelBtn(
+                    aria="Unclip for coupon: Save $1 on eggs")
+            ])
+
+    assert clipper._wait_for_clip_confirmation(
+        ReplacementPage(), StaleNamedLocator(),
+        "Clip for coupon: Save $1 on eggs", timeout=0) is True
 
 
 def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
@@ -518,6 +633,66 @@ def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypa
             is clip_calls[1][1]["clicked_keys"])
 
 
+def test_relevance_mode_max_limits_confirmed_coupons_for_this_run(
+        monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    budgets = []
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (500, 100))
+    monkeypatch.setattr(clipper, "select_departments",
+                        lambda page, wanted, debug=False: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    def fake_clip(page, cfg, budget, args, **kwargs):
+        budgets.append(budget)
+        return clipper.ClipResult(clipped=budget, exhausted=False)
+
+    monkeypatch.setattr(clipper, "_clip_relevant", fake_clip)
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=150, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=False, estimates=None)
+    args = SimpleNamespace(
+        dry_run=False, debug=False, min_delay=0, max_delay=0, max=3)
+
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 0
+    assert budgets == [3]
+    assert "limited to 3 confirmed coupon(s)" in capsys.readouterr().out
+
+
+def test_relevance_mode_without_assumed_cap_uses_clippable_count(
+        monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    budgets = []
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "scroll_to_load_all",
+                        lambda page, debug=False: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (7, 100))
+    monkeypatch.setattr(clipper, "select_departments",
+                        lambda page, wanted, debug=False: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    def fake_clip(page, cfg, budget, args, **kwargs):
+        budgets.append(budget)
+        return clipper.ClipResult(clipped=budget, exhausted=False)
+
+    monkeypatch.setattr(clipper, "_clip_relevant", fake_clip)
+    cfg = SimpleNamespace(
+        departments=["Dairy"], max_clips=0, min_savings=0.0,
+        include_nondollar=True, fill_to_limit=False, estimates=None)
+    args = SimpleNamespace(
+        dry_run=False, debug=False, min_delay=0, max_delay=0, max=0)
+
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 0
+    assert budgets == [7]
+    assert "No configured account cap" in capsys.readouterr().out
+
+
 def test_relevance_mode_without_fill_reports_preferred_exhaustion(
         monkeypatch, capsys):
     from types import SimpleNamespace
@@ -645,3 +820,46 @@ def test_find_department_option_times_out(monkeypatch):
     monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
     panel = _LazyPanel(appear_on=None)         # never renders
     assert clipper._find_department_option(panel, "Nope", timeout=8, poll=0) is None
+
+
+def test_select_departments_retries_detached_row(monkeypatch):
+    class Heading:
+        first = None
+
+        def __init__(self):
+            self.first = self
+
+        def wait_for(self, timeout=None):
+            pass
+
+    class Page:
+        def get_by_text(self, text, exact=False):
+            assert (text, exact) == ("Departments", True)
+            return Heading()
+
+    class StaleTarget:
+        def scroll_into_view_if_needed(self, timeout=None):
+            raise RuntimeError("Element is not attached to the DOM")
+
+    class LiveTarget:
+        clicked = False
+
+        def scroll_into_view_if_needed(self, timeout=None):
+            pass
+
+        def click(self):
+            self.clicked = True
+
+    live = LiveTarget()
+    targets = iter([StaleTarget(), live])
+    monkeypatch.setattr(clipper, "_find_department_option",
+                        lambda page, name: next(targets))
+    monkeypatch.setattr(clipper, "clear_filters",
+                        lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    matched, missing = clipper.select_departments(Page(), ["Frozen"])
+
+    assert matched == ["Frozen"]
+    assert missing == []
+    assert live.clicked is True
