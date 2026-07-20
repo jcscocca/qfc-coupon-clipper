@@ -39,7 +39,7 @@ departments = [
 ]
 
 # Cap on clips, accounting for already-clipped coupons (relevance mode only).
-max_clips = 250
+max_clips = 150
 
 # Skip coupons whose (estimated) value is below this. 0 = no floor.
 min_savings = 0.0
@@ -48,7 +48,7 @@ min_savings = 0.0
 include_nondollar = true
 
 # After preferred departments are exhausted, clear filters and keep clipping the
-# highest-value remaining coupons until max_clips or QFC's account limit.
+# coupons in QFC's existing top-to-bottom order until max_clips or the account limit.
 fill_to_limit = false
 
 [estimates]
