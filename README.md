@@ -34,8 +34,9 @@ Once you've cloned the repo (above), you don't need the manual steps below:
 
 The first run installs everything automatically (it calls `scripts/setup.sh`), then
 opens the browser. Sign in to QFC if you aren't already — clipping starts on its own
-once your coupons load. (`launch.*` is the interactive path; `scripts/run.sh` is the
-unattended/scheduled one.)
+once your coupons load. After a successful clipping run, the launcher also imports
+the latest **My Purchases** receipt into the verified-savings ledger. (`launch.*` is
+the interactive path; `scripts/run.sh` is the unattended/scheduled coupon-only one.)
 
 ## First run
 
@@ -102,6 +103,32 @@ Preview before clipping — prints the ranked plan with `(est)` markers, clips n
 ```bash
 python qfc_coupon_clipper.py --debug --dry-run
 ```
+
+## Verified savings from receipts
+
+The receipt-savings command opens QFC **My Purchases**, selects the latest in-store
+purchase, reads its online receipt, and records the verified receipt total locally:
+
+```bash
+python qfc_receipt_savings.py                 # latest purchase
+python qfc_receipt_savings.py --date 2026-07-20
+```
+
+This runs automatically after every successful `launch.sh` / `launch.command` coupon
+run. Calling `qfc_coupon_clipper.py` or the scheduled `scripts/run.sh` directly stays
+coupon-only. The receipt import is idempotent, so repeated launcher runs do not
+double-count the latest purchase.
+
+It reports the amount paid, actual savings, savings percentage, and cumulative
+savings across imported receipts. The ledger is stored at
+`data/receipt_savings.json` and is gitignored because it contains personal purchase
+history. Use `--output PATH` to store it elsewhere.
+
+QFC's online receipt combines digital coupons, store promotions, BOGO offers, and
+sale pricing under **Item Coupons/Sales**. The indicator therefore says **verified
+receipt savings**; it does not claim that every dollar came from coupons clipped by
+this tool. The importer also reconciles original item total minus savings plus fees
+and tax against the paid total before recording a receipt.
 
 ## Scheduling
 
