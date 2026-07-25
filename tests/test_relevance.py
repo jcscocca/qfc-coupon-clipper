@@ -101,7 +101,7 @@ from relevance import Config, load_config  # noqa: E402
 def test_defaults_when_no_file():
     cfg = load_config(None)
     assert cfg.departments == []
-    assert cfg.max_clips == 0
+    assert cfg.max_clips == 249
     assert cfg.min_savings == 0.0
     assert cfg.include_nondollar is True
     assert cfg.fill_to_limit is False
@@ -137,6 +137,11 @@ def test_cli_overrides_win():
     assert cfg.departments == ["Produce"]
     assert cfg.max_clips == 10
     assert cfg.min_savings == 2.0
+
+
+def test_zero_max_clips_override_disables_account_cap():
+    cfg = load_config(None, {"max_clips": 0})
+    assert cfg.max_clips == 0
 
 
 def test_thousands_separator():

@@ -38,9 +38,9 @@ departments = [
   # "Tobacco",
 ]
 
-# Optional account-wide ceiling, accounting for already-clipped coupons.
-# 0 = no assumed QFC limit; keep clipping until QFC rejects or coupons run out.
-max_clips = 0
+# QFC's observed account maximum is 249 coupons. Already-clipped coupons count
+# toward this total. Set to 0 only to rely on QFC's own limit response.
+max_clips = 249
 
 # Skip coupons whose (estimated) value is below this. 0 = no floor.
 min_savings = 0.0

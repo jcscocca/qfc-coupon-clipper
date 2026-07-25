@@ -608,12 +608,12 @@ def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypa
         clip_calls.append((budget, kwargs))
         if kwargs["phase"] == "preferred":
             return clipper.ClipResult(clipped=68, exhausted=True)
-        return clipper.ClipResult(clipped=138, exhausted=False)
+        return clipper.ClipResult(clipped=137, exhausted=False)
 
     monkeypatch.setattr(clipper, "_clip_relevant", fake_clip)
 
     cfg = SimpleNamespace(
-        departments=["Dairy"], max_clips=250, min_savings=0.5,
+        departments=["Dairy"], max_clips=249, min_savings=0.5,
         include_nondollar=False, fill_to_limit=True, estimates=None)
     args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
 
@@ -624,7 +624,7 @@ def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypa
         "clear", "scroll", "scan", "select", "scroll", "clip:preferred",
         "clear", "scroll", "clip:fill",
     ]
-    assert [call[0] for call in clip_calls] == [206, 138]
+    assert [call[0] for call in clip_calls] == [205, 137]
     assert clip_calls[0][1]["min_savings"] == 0.5
     assert clip_calls[0][1]["include_nondollar"] is False
     assert clip_calls[1][1]["min_savings"] == 0.0

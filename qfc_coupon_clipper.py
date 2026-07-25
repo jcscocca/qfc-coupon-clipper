@@ -65,9 +65,10 @@ CLIP_TEXTS = ["clip for coupon", "clip", "add coupon", "load coupon", "add to ca
 # Fragments that mean the coupon is ALREADY clipped -> skip it.
 CLIPPED_TEXTS = ["clipped", "unclip", "added", "remove coupon", "you clipped"]
 
-# On-page text meaning QFC cut us off at the account clip limit. fill_to_limit
-# clips toward the cap, so this is the primary guard against over-clipping: it
-# must catch QFC's real wording ("reached the maximum number of coupons you can
+# On-page text meaning QFC cut us off at its observed 249-coupon account limit.
+# The configured cap should normally stop first; this remains a safety guard when
+# QFC's count differs from the coupons visible to the script or the cap is disabled.
+# It must catch QFC's real wording ("reached the maximum number of coupons you can
 # clip", "coupon limit reached") in either order, without matching ordinary
 # "Clip for coupon" tiles.
 _LIMIT_RE = re.compile(
