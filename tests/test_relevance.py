@@ -30,9 +30,39 @@ def test_bogo_buy_n_get_m():
     assert s.kind == "bogo" and s.value == 5.0
 
 
+def test_bogo_allows_quantity_and_product_text_from_live_qfc_label():
+    label = (
+        "Clip for coupon: BUY ONE (1) GATORADE® WATER SINGLE SERVE, "
+        "GET 1 FREE coupon"
+    )
+    s = parse_savings(label, Estimates(bogo=5.0))
+    assert (s.kind, s.value, s.estimated) == ("bogo", 5.0, True)
+
+
+def test_bogo_product_text_match_is_bounded():
+    label = "buy one " + ("very long product name " * 10) + "get one free"
+    assert parse_savings(label, Estimates()).kind == "unknown"
+
+
 def test_percent():
     s = parse_savings("20% off any item", Estimates(assumed_item_price=4.0))
     assert s.kind == "percent" and abs(s.value - 0.8) < 1e-9 and s.estimated is True
+
+
+def test_percent_supports_live_qfc_save_on_wording():
+    s = parse_savings(
+        "Clip for coupon: Save 20% on Larabar mini variety pack",
+        Estimates(assumed_item_price=4.0),
+    )
+    assert (s.kind, s.value, s.estimated) == ("percent", 0.8, True)
+
+
+def test_fixed_sale_price_is_not_treated_as_dollar_savings():
+    s = parse_savings(
+        "Clip for coupon: $2.99 QFC Butter coupon",
+        Estimates(unknown=1.0),
+    )
+    assert (s.kind, s.value, s.estimated) == ("price", 1.0, True)
 
 
 def test_unknown():

@@ -12,10 +12,21 @@ from typing import Any
 
 # --- value parsing --------------------------------------------------------
 
-_DOLLAR_RE = re.compile(r"\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)")
-_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*off")
+_AMOUNT_PATTERN = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?"
+_DOLLAR_RE = re.compile(
+    rf"(?:\bsave\s+\$\s*(?P<save>{_AMOUNT_PATTERN})"
+    rf"|\$\s*(?P<offer>{_AMOUNT_PATTERN})\s*(?:off|coupon)\b"
+    rf"|\bup\s+to\s+\$\s*(?P<cap>{_AMOUNT_PATTERN}))",
+    re.I,
+)
+_PERCENT_RE = re.compile(
+    r"(?:\bsave\s+)?(\d+(?:\.\d+)?)\s*%\s*(?:off|on)\b",
+    re.I,
+)
+_PRICE_RE = re.compile(rf"\$\s*({_AMOUNT_PATTERN})")
 _BOGO_RE = re.compile(
-    r"\b(?:b1g1|bogo|buy\s+\w+\s+get\s+\w+\s+free|buy\s+one\s+get\s+one)\b"
+    r"\b(?:b1g1|bogo|buy\s+(?:one|\d+)\b.{0,120}?\bget\s+"
+    r"(?:one|\d+)\s+free|buy\s+one\s+get\s+one)\b"
 )
 
 
@@ -30,19 +41,21 @@ class Estimates:
 @dataclass
 class Savings:
     value: float          # comparable dollar figure used for ranking
-    kind: str             # "dollar" | "bogo" | "percent" | "unknown"
+    kind: str             # "dollar" | "bogo" | "percent" | "price" | "unknown"
     estimated: bool
 
 
 def parse_savings(text: str | None, estimates: Estimates) -> Savings:
     """Map a coupon label / tile text to a comparable dollar Savings.
 
-    First match wins: explicit dollar > BOGO > percent > unknown.
+    First match wins: explicit dollar savings > BOGO > percent > fixed price >
+    unknown.
     """
     t = (text or "").lower()
     m = _DOLLAR_RE.search(t)
     if m:
-        return Savings(value=float(m.group(1).replace(",", "")), kind="dollar", estimated=False)
+        amount = m.group("save") or m.group("offer") or m.group("cap")
+        return Savings(value=float(amount.replace(",", "")), kind="dollar", estimated=False)
     if _BOGO_RE.search(t):
         return Savings(value=estimates.bogo, kind="bogo", estimated=True)
     m = _PERCENT_RE.search(t)
@@ -53,6 +66,11 @@ def parse_savings(text: str | None, estimates: Estimates) -> Savings:
             kind="percent",
             estimated=True,
         )
+    if _PRICE_RE.search(t):
+        # A label such as "$2.99 QFC Butter" is the resulting sale price, not
+        # $2.99 of savings. Without the regular price, use the neutral fallback
+        # estimate rather than promoting it above known dollar-off coupons.
+        return Savings(value=estimates.unknown, kind="price", estimated=True)
     return Savings(value=estimates.unknown, kind="unknown", estimated=True)
 
 

@@ -243,6 +243,43 @@ def test_wait_until_ready_timeout(monkeypatch, capsys):
     assert "Sign in" not in capsys.readouterr().out
 
 
+def test_wait_until_ready_reloads_transient_empty_page(monkeypatch, capsys):
+    class Page:
+        reloads = 0
+
+        def reload(self, **kwargs):
+            self.reloads += 1
+
+    page = Page()
+    _patch_ready(monkeypatch, [(0, 0), (2, 0)])
+    monkeypatch.setattr(clipper, "detect_transient_empty_page", lambda page: True)
+    times = iter([0.0, 11.0])
+    monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
+
+    assert clipper.wait_until_ready(
+        page, timeout=180, poll=0, reload_after=10, max_reloads=2) is True
+    assert page.reloads == 1
+    assert "reloading (1/2)" in capsys.readouterr().out
+
+
+def test_wait_until_ready_does_not_reload_sign_in_page(monkeypatch):
+    class Page:
+        reloads = 0
+
+        def reload(self, **kwargs):
+            self.reloads += 1
+
+    page = Page()
+    _patch_ready(monkeypatch, [(0, 0)], logged_out=True)
+    monkeypatch.setattr(clipper, "detect_transient_empty_page", lambda page: True)
+    times = iter([0.0, 999.0])
+    monkeypatch.setattr(clipper.time, "monotonic", lambda: next(times))
+
+    assert clipper.wait_until_ready(
+        page, timeout=180, poll=0, reload_after=0, max_reloads=2) is False
+    assert page.reloads == 0
+
+
 # --- _clip_relevant: never double-click the same coupon ---------------------
 
 class _FakeBtn:
@@ -528,10 +565,11 @@ def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
 # --- clear_filters ----------------------------------------------------------
 
 class _ClearButton:
-    def __init__(self, visible=True, enabled=True):
+    def __init__(self, visible=True, enabled=True, on_click=None):
         self.visible = visible
         self.enabled = enabled
         self.clicks = 0
+        self.on_click = on_click
 
     def is_visible(self):
         return self.visible
@@ -539,8 +577,10 @@ class _ClearButton:
     def is_enabled(self):
         return self.enabled
 
-    def click(self):
+    def click(self, timeout=None):
         self.clicks += 1
+        if self.on_click:
+            self.on_click()
 
 
 class _ButtonList:
@@ -559,16 +599,60 @@ class _ClearPage:
         self.buttons = buttons
 
     def get_by_role(self, role, name=None):
-        assert (role, name) == ("button", "Clear All")
+        assert role == "button"
+        assert name.search("Clear All")
         return _ButtonList(self.buttons)
+
+    def get_by_text(self, text, exact=False):
+        raise RuntimeError("filter heading unavailable in this legacy variant")
 
 
 def test_clear_filters_clicks_each_visible_enabled_control(monkeypatch):
     buttons = [_ClearButton(), _ClearButton(visible=False), _ClearButton()]
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+    monkeypatch.setattr(clipper, "_checked_filter_count", lambda page: None)
 
     assert clipper.clear_filters(_ClearPage(buttons)) is True
     assert [button.clicks for button in buttons] == [1, 0, 1]
+
+
+def test_clear_filters_supports_current_accessible_name_and_verifies(monkeypatch):
+    checks = iter([1, 0])
+    button = _ClearButton()
+    page = _ClearPage([button])
+    monkeypatch.setattr(clipper, "_checked_filter_count", lambda page: next(checks))
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    original_get_by_role = page.get_by_role
+
+    def get_by_role(role, name=None):
+        assert name.search("Clear all selected Departments filters")
+        return original_get_by_role(role, name)
+
+    page.get_by_role = get_by_role
+
+    assert clipper.clear_filters(page) is True
+    assert button.clicks == 1
+
+
+def test_clear_filters_does_not_stop_after_inactive_section_button(monkeypatch):
+    state = {"checked": 1}
+    inactive = _ClearButton()
+    active = _ClearButton(on_click=lambda: state.update(checked=0))
+    page = _ClearPage([inactive, active])
+    monkeypatch.setattr(
+        clipper, "_checked_filter_count", lambda page: state["checked"])
+    monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
+
+    assert clipper.clear_filters(page) is True
+    assert [inactive.clicks, active.clicks] == [1, 1]
+
+
+def test_clear_filters_fails_when_checked_controls_cannot_be_cleared(monkeypatch):
+    page = _ClearPage([])
+    monkeypatch.setattr(clipper, "_checked_filter_count", lambda page: 1)
+
+    assert clipper.clear_filters(page) is False
 
 
 # --- fill-to-limit orchestration -------------------------------------------
@@ -580,6 +664,47 @@ class _RunMouse:
 
 class _RunPage:
     mouse = _RunMouse()
+
+
+def test_verified_unfiltered_load_recovers_stale_preferred_grid(monkeypatch):
+    from types import SimpleNamespace
+
+    scans = iter([(0, 129), (129, 172)])
+    events = []
+    monkeypatch.setattr(
+        clipper, "_load_full_coupon_list",
+        lambda page, args: events.append("load"))
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: next(scans))
+    monkeypatch.setattr(
+        clipper, "_reload_coupon_page",
+        lambda page, debug=False: events.append("reload") or True)
+    monkeypatch.setattr(
+        clipper, "wait_until_ready",
+        lambda page, **kwargs: events.append("ready") or True)
+    monkeypatch.setattr(
+        clipper, "clear_filters",
+        lambda page, debug=False: events.append("clear") or True)
+
+    args = SimpleNamespace(debug=False)
+    result = clipper._load_verified_unfiltered_list(
+        object(), args, expected_total=301)
+
+    assert result == (True, 129, 172)
+    assert events == ["load", "reload", "ready", "clear", "load"]
+
+
+def test_verified_unfiltered_load_reports_incomplete_inventory(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(clipper, "_load_full_coupon_list", lambda page, args: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda page: (0, 129))
+    monkeypatch.setattr(clipper, "_reload_coupon_page", lambda page, debug=False: True)
+    monkeypatch.setattr(clipper, "wait_until_ready", lambda page, **kwargs: False)
+    monkeypatch.setattr(clipper, "clear_filters", lambda page, debug=False: True)
+
+    args = SimpleNamespace(debug=False)
+    assert clipper._load_verified_unfiltered_list(
+        object(), args, expected_total=301, attempts=2) == (False, 0, 129)
 
 
 def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypatch):
@@ -622,7 +747,7 @@ def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypa
     # the already-clipped count comes from that scan, not a second pass.
     assert events == [
         "clear", "scroll", "scan", "select", "scroll", "clip:preferred",
-        "clear", "scroll", "clip:fill",
+        "clear", "scroll", "scan", "clip:fill",
     ]
     assert [call[0] for call in clip_calls] == [205, 137]
     assert clip_calls[0][1]["min_savings"] == 0.5

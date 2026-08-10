@@ -2,7 +2,13 @@ from dataclasses import replace
 
 import pytest
 
-from qfc_receipt_savings import select_purchase
+import qfc_receipt_savings as receipt_importer
+from qfc_receipt_savings import (
+    is_login_page,
+    missing_purchases_error,
+    select_purchase,
+    wait_for_purchases,
+)
 from receipt_savings import (
     ReceiptParseError,
     format_indicator,
@@ -94,3 +100,54 @@ def test_select_purchase_defaults_to_latest_and_accepts_date():
     assert select_purchase(purchases, "2026-07-05") == purchases[1]
     with pytest.raises(ReceiptParseError, match="no purchase"):
         select_purchase(purchases, "2026-07-01")
+
+
+def test_login_page_detection_supports_current_kroger_identity_url():
+    class Page:
+        url = "https://login.kroger.com/eciamp.onmicrosoft.com/oauth2/authorize"
+
+    assert is_login_page(Page()) is True
+
+
+def test_receipt_wait_returns_immediately_for_noninteractive_login(monkeypatch):
+    class Page:
+        url = "https://login.kroger.com/signin"
+
+    monkeypatch.setattr(receipt_importer, "discover_purchase_urls", lambda page: [])
+    sleeps = []
+    monkeypatch.setattr(receipt_importer.time, "sleep", sleeps.append)
+    monkeypatch.setattr(receipt_importer.time, "monotonic", lambda: 0.0)
+
+    assert wait_for_purchases(
+        Page(), timeout=10, allow_interactive_login=False) == []
+    assert sleeps == []
+
+
+def test_receipt_wait_prompts_once_then_continues_after_login(monkeypatch, capsys):
+    class Page:
+        url = "https://login.kroger.com/signin"
+
+    results = iter([[], [("2026-08-09", "https://www.qfc.com/detail")]])
+    monkeypatch.setattr(
+        receipt_importer, "discover_purchase_urls", lambda page: next(results))
+    monkeypatch.setattr(receipt_importer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(receipt_importer.time, "monotonic", lambda: 0.0)
+
+    purchases = wait_for_purchases(Page(), timeout=10)
+
+    assert purchases[0][0] == "2026-08-09"
+    assert capsys.readouterr().out.count("requires a fresh sign-in") == 1
+
+
+def test_missing_purchases_error_distinguishes_incomplete_authentication():
+    class LoginPage:
+        url = "https://login.kroger.com/signin"
+
+    class PurchasesPage:
+        url = "https://www.qfc.com/mypurchases"
+
+    assert "reauthentication was not completed" in str(
+        missing_purchases_error(LoginPage()))
+    assert "ledger was not updated" in str(missing_purchases_error(LoginPage()))
+    assert str(missing_purchases_error(PurchasesPage())) == (
+        "no purchases were found on My Purchases")
