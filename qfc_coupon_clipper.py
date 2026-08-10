@@ -77,6 +77,16 @@ _LIMIT_RE = re.compile(
     re.I,
 )
 
+_EMPTY_COUPONS_RE = re.compile(
+    r"we(?:'|’)?re\s+not\s+finding\s+any\s+coupons\s+right\s+now",
+    re.I,
+)
+
+_CLEAR_FILTER_RE = re.compile(
+    r"^clear(?:\s+all)?(?:\s+selected\b.*\bfilters?)?$",
+    re.I,
+)
+
 # ---------------------------------------------------------------------------
 
 
@@ -294,6 +304,33 @@ def scan_coupon_buttons(page):
     return n_clip, n_clipped
 
 
+def detect_transient_empty_page(page) -> bool:
+    """Return True for QFC's temporary empty-grid error state.
+
+    During the live launch QFC rendered a signed-in header but left the store on
+    ``Loading`` and displayed this error until the page was reloaded. This is not
+    the same as being signed out or having a genuinely empty coupon inventory.
+    """
+    try:
+        empty = page.get_by_text(_EMPTY_COUPONS_RE)
+        return bool(empty.count() and empty.first.is_visible())
+    except Exception:
+        return False
+
+
+def _reload_coupon_page(page, *, debug=False) -> bool:
+    """Reload the coupon route after a transient render failure."""
+    try:
+        page.reload(wait_until="domcontentloaded", timeout=60000)
+        return True
+    except PWTimeout:
+        log("Coupon page reload timed out; continuing to wait.")
+    except Exception as exc:
+        log(f"Coupon page reload failed: {exc}", debug=debug,
+            is_debug_only=True)
+    return False
+
+
 def _stable_coupon_button(page, label, fallback):
     """Resolve a coupon action by its exact accessible name at click time.
 
@@ -311,7 +348,8 @@ def _stable_coupon_button(page, label, fallback):
     return fallback
 
 
-def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
+def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False,
+                     reload_after=10.0, max_reloads=2, prompt_login=True):
     """Poll until the coupon grid is rendered (i.e. we're signed in), instead of
     blocking on ENTER. Shows a one-time sign-in prompt if the page looks logged
     out. Returns True if coupons appeared within `timeout` seconds, else False.
@@ -319,20 +357,33 @@ def wait_until_ready(page, *, timeout=180, poll=2.0, debug=False):
     A positive signal (any clippable/clipped coupon visible) wins immediately, so
     a stray "Sign In" footer link never aborts a good session.
     """
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
+    next_reload = started + reload_after
     prompted = False
+    reloads = 0
     while True:
         dismiss_modal(page, debug=debug)
         n_clip, n_clipped = scan_coupon_buttons(page)
         if n_clip + n_clipped > 0:
             return True
-        if not prompted and detect_logged_out(page):
+        logged_out = detect_logged_out(page)
+        if prompt_login and not prompted and logged_out:
             print("\n" + "=" * 64)
             print("Sign in to QFC in the browser window that just opened.")
             print("Clipping starts automatically once your coupons load.")
             print("=" * 64, flush=True)
             prompted = True
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if (not logged_out and reloads < max_reloads and now >= next_reload
+                and detect_transient_empty_page(page)):
+            reloads += 1
+            log(f"QFC has not populated the coupon grid; reloading "
+                f"({reloads}/{max_reloads})...")
+            _reload_coupon_page(page, debug=debug)
+            next_reload = now + reload_after
+            continue
+        if now >= deadline:
             return False
         time.sleep(poll)
 
@@ -441,26 +492,104 @@ def _find_department_option(page, name, *, timeout=8.0, poll=0.5):
         time.sleep(poll)
 
 
-def clear_filters(page, debug=False):
-    """Clear every active coupon facet. Return False if a clear click fails."""
-    success = True
+def _checked_filter_count(page):
+    """Return the number of checked coupon facets, or None if unavailable."""
     try:
-        clear_all = page.get_by_role("button", name="Clear All")
-        for i in range(clear_all.count()):
+        checkboxes = page.get_by_role("checkbox")
+        count = 0
+        for i in range(checkboxes.count()):
             try:
-                btn = clear_all.nth(i)
-                if btn.is_visible() and btn.is_enabled():
-                    btn.click()
-                    human_pause(0.3, 0.6)
-            except Exception as e:
-                success = False
-                log(f"  could not clear a coupon filter: {e}", debug=debug,
-                    is_debug_only=True)
-    except Exception as e:
-        log(f"  could not inspect coupon filters: {e}", debug=debug,
-            is_debug_only=True)
-        return False
-    return success
+                if checkboxes.nth(i).is_checked():
+                    count += 1
+            except Exception:
+                continue
+        return count
+    except Exception:
+        return None
+
+
+def clear_filters(page, debug=False):
+    """Clear every active coupon facet and verify that it is unchecked.
+
+    QFC currently names section controls like ``Clear all selected Departments
+    filters`` rather than the older ``Clear All``. Every click can also replace
+    the filter DOM, so this deliberately re-resolves controls on each pass.
+    """
+    try:
+        page.get_by_text("Departments", exact=True).first.wait_for(timeout=20000)
+    except Exception:
+        # The caller may be recovering a partially rendered page. Continue with
+        # whatever controls are present and let inventory verification decide.
+        pass
+
+    for _ in range(100):
+        checked = _checked_filter_count(page)
+        if checked == 0:
+            return True
+
+        if checked is None:
+            success = True
+            try:
+                clear_buttons = page.get_by_role("button", name=_CLEAR_FILTER_RE)
+                for i in range(clear_buttons.count()):
+                    try:
+                        button = clear_buttons.nth(i)
+                        if button.is_visible() and button.is_enabled():
+                            button.click(timeout=3000)
+                            human_pause(0.3, 0.6)
+                    except Exception:
+                        success = False
+            except Exception:
+                return False
+            return success
+
+        clicked = False
+        try:
+            clear_buttons = page.get_by_role("button", name=_CLEAR_FILTER_RE)
+            for i in range(clear_buttons.count()):
+                button = clear_buttons.nth(i)
+                try:
+                    if button.is_visible() and button.is_enabled():
+                        button.click(timeout=3000)
+                        clicked = True
+                        # QFC exposes enabled clear buttons for inactive filter
+                        # sections too. Continue through the whole set so a
+                        # no-op Ways-To-Shop control cannot starve the active
+                        # Departments control. Stale nodes are caught below and
+                        # re-resolved on the next outer pass.
+                except Exception:
+                    continue
+        except Exception as exc:
+            log(f"  could not inspect clear-filter controls: {exc}", debug=debug,
+                is_debug_only=True)
+
+        # Fallback for a QFC variant without a clear button: toggle one checked
+        # checkbox off, then re-resolve the list after the resulting re-render.
+        if not clicked and checked:
+            try:
+                checkboxes = page.get_by_role("checkbox")
+                for i in range(checkboxes.count()):
+                    checkbox = checkboxes.nth(i)
+                    try:
+                        if (checkbox.is_checked() and checkbox.is_visible()
+                                and checkbox.is_enabled()):
+                            checkbox.click(timeout=3000)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if not clicked:
+            log("  active coupon filters remain but no clear control is usable",
+                debug=debug, is_debug_only=True)
+            return False
+        human_pause(0.3, 0.6)
+
+    log("  coupon filters did not settle after repeated clear attempts",
+        debug=debug, is_debug_only=True)
+    return False
 
 
 def select_departments(page, wanted, debug=False):
@@ -645,6 +774,40 @@ def _load_full_coupon_list(page, args):
     human_pause(1.0, 2.0)
 
 
+def _load_verified_unfiltered_list(page, args, *, expected_total, attempts=3):
+    """Load the unfiltered grid and verify it against a known baseline.
+
+    The preferred-to-fill transition can briefly leave the old filtered grid in
+    the DOM. A zero-candidate scan in that state is not proof of exhaustion. On
+    an incomplete scan, reload the route, clear filters again, and retry.
+    Returns ``(verified, n_clippable, n_clipped)`` using the best scan observed.
+    """
+    best = (0, 0)
+    for attempt in range(attempts):
+        if attempt:
+            log(f"Unfiltered coupon inventory is still incomplete "
+                f"({sum(best)}/{expected_total}); reloading "
+                f"({attempt}/{attempts - 1})...")
+            _reload_coupon_page(page, debug=args.debug)
+            wait_until_ready(
+                page, timeout=60, poll=2.0, debug=args.debug,
+                reload_after=10.0, max_reloads=1, prompt_login=False)
+            if not clear_filters(page, debug=args.debug):
+                continue
+
+        _load_full_coupon_list(page, args)
+        state = scan_coupon_buttons(page)
+        if sum(state) > sum(best):
+            best = state
+        log(f"Fill-page inventory check: {state[0]} clippable, "
+            f"{state[1]} already-clipped coupon(s) visible.",
+            debug=args.debug, is_debug_only=True)
+        if sum(state) >= expected_total:
+            return True, *state
+
+    return False, *best
+
+
 def _run_relevance_mode(page, cfg, args):
     """Clip preferred departments first, then optionally fill unused capacity."""
     if not clear_filters(page, debug=args.debug):
@@ -706,7 +869,7 @@ def _run_relevance_mode(page, cfg, args):
     failed = preferred.failed
     confirmation_blocked = preferred.confirmation_blocked
 
-    fill_skipped = False
+    fill_skip_reason = None
     remaining = max(0, budget - total_used)
     if (cfg.fill_to_limit and remaining and not limit_hit
             and not confirmation_blocked):
@@ -715,16 +878,25 @@ def _run_relevance_mode(page, cfg, args):
         if not clear_filters(page, debug=args.debug):
             log("WARNING: could not clear department filters; skipping the fill "
                 "phase (preferred clips are kept).")
-            fill_skipped = True
+            fill_skip_reason = "department filters could not be cleared"
         else:
-            _load_full_coupon_list(page, args)
-            fill = _clip_relevant(
-                page, cfg, remaining, args, clicked_keys=clicked_keys,
-                min_savings=0.0, include_nondollar=True, phase="fill")
-            total_used += fill.planned if args.dry_run else fill.clipped
-            limit_hit = fill.limit_hit
-            failed += fill.failed
-            confirmation_blocked = fill.confirmation_blocked
+            verified, fill_n_clip, fill_n_clipped = _load_verified_unfiltered_list(
+                page, args, expected_total=n_clip + n_clipped)
+            if not verified:
+                log("WARNING: could not verify that QFC restored the full "
+                    f"unfiltered coupon list (best scan: {fill_n_clip} clippable, "
+                    f"{fill_n_clipped} already clipped; expected at least "
+                    f"{n_clip + n_clipped} total). Skipping the fill phase rather "
+                    "than reporting false exhaustion.")
+                fill_skip_reason = "the unfiltered coupon inventory could not be verified"
+            else:
+                fill = _clip_relevant(
+                    page, cfg, remaining, args, clicked_keys=clicked_keys,
+                    min_savings=0.0, include_nondollar=True, phase="fill")
+                total_used += fill.planned if args.dry_run else fill.clipped
+                limit_hit = fill.limit_hit
+                failed += fill.failed
+                confirmation_blocked = fill.confirmation_blocked
 
     log("\n" + "-" * 40)
     if args.dry_run:
@@ -740,9 +912,9 @@ def _run_relevance_mode(page, cfg, args):
     elif total_used >= budget:
         log(f"Done. Clipped {total_used} coupon(s); all coupons that were "
             "available at the start of the run were processed.")
-    elif fill_skipped:
-        log(f"Done. Clipped {total_used} coupon(s); could not clear filters, so "
-            f"the fill phase was skipped ({budget - total_used} capacity unused).")
+    elif fill_skip_reason:
+        log(f"Done. Clipped {total_used} coupon(s); fill phase incomplete because "
+            f"{fill_skip_reason} ({budget - total_used} capacity unused).")
     elif not cfg.fill_to_limit:
         log(f"Done. Clipped {total_used} coupon(s); preferred coupons were "
             f"exhausted with {budget - total_used} capacity remaining.")
@@ -767,7 +939,7 @@ def main():
     ap.add_argument("--max-delay", type=float, default=4.2,
                     help="max seconds between clips (default 4.2)")
     ap.add_argument("--no-wait-login", action="store_true",
-                    help="skip the 'press ENTER after login' prompt")
+                    help="skip the interactive sign-in wait (scheduled runs)")
     ap.add_argument("--config", default=None,
                     help="path to a config.toml (default: config.toml beside this script)")
     ap.add_argument("--departments", default=None,

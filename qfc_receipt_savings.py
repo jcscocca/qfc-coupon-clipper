@@ -29,6 +29,12 @@ DEFAULT_LEDGER = Path(__file__).parent / "data" / "receipt_savings.json"
 _PURCHASE_DATE_RE = re.compile(r"/mypurchases/detail/[^~]+~[^~]+~(\d{4}-\d{2}-\d{2})~")
 
 
+def is_login_page(page) -> bool:
+    """Return whether QFC redirected My Purchases to its identity provider."""
+    url = (getattr(page, "url", "") or "").lower()
+    return "login.kroger.com" in url or "/signin" in url
+
+
 def discover_purchase_urls(page) -> list[tuple[str, str]]:
     """Return unique ``(ISO date, absolute detail URL)`` pairs from the page."""
     hrefs = page.locator('a[href^="/mypurchases/detail/"]').evaluate_all(
@@ -42,21 +48,37 @@ def discover_purchase_urls(page) -> list[tuple[str, str]]:
     return sorted(((when, url) for url, when in purchases.items()), reverse=True)
 
 
-def wait_for_purchases(page, *, timeout: float = 180.0) -> list[tuple[str, str]]:
+def wait_for_purchases(
+    page, *, timeout: float = 180.0, allow_interactive_login: bool = True
+) -> list[tuple[str, str]]:
     deadline = time.monotonic() + timeout
     prompted = False
     while time.monotonic() < deadline:
         purchases = discover_purchase_urls(page)
         if purchases:
             return purchases
-        if not prompted and ("signin" in page.url or "login.kroger.com" in page.url):
+        if is_login_page(page) and not allow_interactive_login:
+            return []
+        if not prompted and is_login_page(page):
             print(
-                "Sign in to QFC in the opened browser; purchase import will "
-                "continue automatically."
+                "QFC My Purchases requires a fresh sign-in even though coupon "
+                "access may still work. Sign in in the opened browser; the "
+                "receipt import will continue automatically."
             )
             prompted = True
         time.sleep(2)
     return []
+
+
+def missing_purchases_error(page) -> ReceiptParseError:
+    """Explain whether purchases are absent or authentication was incomplete."""
+    if is_login_page(page):
+        return ReceiptParseError(
+            "QFC My Purchases reauthentication was not completed; the receipt "
+            "ledger was not updated. Run qfc_receipt_savings.py interactively "
+            "and sign in in the opened browser."
+        )
+    return ReceiptParseError("no purchases were found on My Purchases")
 
 
 def select_purchase(
@@ -147,7 +169,11 @@ def main(argv: list[str] | None = None) -> int:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(PURCHASES_URL, wait_until="domcontentloaded", timeout=60000)
             timeout = 10.0 if args.no_wait_login else 180.0
-            purchases = wait_for_purchases(page, timeout=timeout)
+            purchases = wait_for_purchases(
+                page, timeout=timeout,
+                allow_interactive_login=not args.no_wait_login)
+            if not purchases:
+                raise missing_purchases_error(page)
             _, detail_url = select_purchase(purchases, args.date)
             receipt = import_receipt(page, detail_url)
             ledger, was_new = save_receipt(args.output, receipt)

@@ -49,7 +49,9 @@ python qfc_coupon_clipper.py
 2. Sign in and select your store if prompted. Your login is saved to
    `~/.qfc_clipper_profile` and reused next time.
 3. It detects when you're signed in and your coupons have loaded, then starts
-   automatically — no need to switch back and press ENTER.
+   automatically — no need to switch back and press ENTER. If QFC temporarily
+   displays its empty-coupon error while the store is still loading, the clipper
+   performs a bounded automatic reload before asking for help.
 4. It scrolls to load all coupons, then clips each one with short randomized pauses,
    printing progress. Any stray "Coupon Details" modal is auto-closed.
 
@@ -61,7 +63,7 @@ python qfc_coupon_clipper.py
 | `--dry-run` | Finds clip buttons and reports them, but clicks nothing. |
 | `--max 25` | Stop after clipping 25 coupons. |
 | `--min-delay` / `--max-delay` | Pause (seconds) between clips. Defaults 3.2–4.2. |
-| `--no-wait-login` | Skip the "press ENTER" prompt — use this for scheduled runs. |
+| `--no-wait-login` | Skip the interactive sign-in wait — use this for scheduled runs. |
 | `--config PATH` | Use a specific `config.toml` (default: `./config.toml`). |
 | `--departments "Dairy,Produce"` | Override the configured departments. |
 | `--min-savings 0.5` | Skip coupons below this (estimated) dollar value. |
@@ -83,8 +85,10 @@ cp config.example.toml config.toml      # then edit it
   maximum); the script subtracts already-clipped coupons. Set it to `0` only to
   rely on QFC's own limit response.
 - `min_savings` — optional floor; skip coupons below this value.
-- `include_nondollar` / `[estimates]` — BOGO and `% off` coupons get an assumed
+- `include_nondollar` / `[estimates]` — BOGO and percent coupons get an assumed
   dollar value so they rank fairly (a BOGO defaults to $5, beating small coupons).
+  Bare fixed-price labels use the `unknown` estimate because the original price—and
+  therefore the actual savings—is not available in the button label.
 - `fill_to_limit` — when `true`, clip configured departments first, then clear the
   filters and clip the unfiltered list from the top down, preserving QFC's
   relevance/popularity order, until an optional `max_clips` ceiling, QFC's actual
@@ -120,6 +124,12 @@ This runs automatically after every successful `launch.sh` / `launch.command` co
 run. Calling `qfc_coupon_clipper.py` or the scheduled `scripts/run.sh` directly stays
 coupon-only. The receipt import is idempotent, so repeated launcher runs do not
 double-count the latest purchase.
+
+QFC may require a fresh sign-in for **My Purchases** even while the coupon page still
+shows you as signed in. When that happens, sign in in the receipt browser window; the
+import resumes automatically. The script never reads or stores the credentials. If
+the sign-in window expires, the launcher reports that coupon clipping succeeded but
+the receipt ledger was not updated.
 
 It reports the amount paid, actual savings, savings percentage, and cumulative
 savings across imported receipts. The ledger is stored at

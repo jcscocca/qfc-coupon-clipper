@@ -27,7 +27,7 @@ if [[ $clipper_rc -eq 0 ]]; then
   receipt_rc=$?
   set -e
   if [[ $receipt_rc -ne 0 ]]; then
-    echo "Receipt savings check failed (exit $receipt_rc)."
+    echo "Coupon clipping completed successfully, but receipt savings was not updated (exit $receipt_rc)."
   fi
 else
   echo
@@ -35,7 +35,11 @@ else
 fi
 
 echo
-read -r -p "Done — press ENTER to close. " || true
+if [[ $clipper_rc -eq 0 && $receipt_rc -eq 0 ]]; then
+  read -r -p "Done — press ENTER to close. " || true
+else
+  read -r -p "Finished with warnings — press ENTER to close. " || true
+fi
 
 if [[ $clipper_rc -ne 0 ]]; then
   exit "$clipper_rc"
