@@ -212,3 +212,9 @@ def test_filter_excluded_no_terms_is_passthrough():
 def test_filter_excluded_does_not_match_across_unrelated_words():
     cands = [_mk("Save $2.00 on Skinny Pop coupon", 2.0, "dollar", False)]
     assert len(filter_excluded(cands, ["lotion", "shampoo"])) == 1
+
+
+def test_exclude_terms_string_is_one_term(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('exclude_terms = "shampoo"\n')
+    assert load_config(p).exclude_terms == ["shampoo"]

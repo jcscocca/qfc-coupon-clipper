@@ -150,13 +150,16 @@ def load_config(path: "str | Path | None", overrides: "dict | None" = None) -> C
             data = tomllib.load(f)
 
     est = data.get("estimates", {})
+    exclude_terms = data.get("exclude_terms", [])
+    if isinstance(exclude_terms, str):
+        exclude_terms = [exclude_terms]
     cfg = Config(
         departments=list(data.get("departments", [])),
         max_clips=int(data.get("max_clips", 249)),
         min_savings=float(data.get("min_savings", 0.0)),
         include_nondollar=bool(data.get("include_nondollar", True)),
         fill_to_limit=bool(data.get("fill_to_limit", False)),
-        exclude_terms=list(data.get("exclude_terms", [])),
+        exclude_terms=list(exclude_terms),
         estimates=Estimates(
             bogo=float(est.get("bogo", 5.0)),
             assumed_item_price=float(est.get("assumed_item_price", 4.0)),
