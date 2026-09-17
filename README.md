@@ -93,6 +93,10 @@ cp config.example.toml config.toml      # then edit it
   filters and clip the unfiltered list from the top down, preserving QFC's
   relevance/popularity order, until an optional `max_clips` ceiling, QFC's actual
   limit, or the available coupon list is reached.
+- `exclude_terms` — case-insensitive substrings; any coupon whose label contains
+  one is skipped in every phase. Departments are coarser than they look (QFC files
+  personal care under `Health`), so this is the finer-grained filter. Keep terms
+  specific: bare `hair` also matches `chair`.
 
 A coupon is counted only after its button changes to QFC's clipped state. Repeated
 unconfirmed clicks stop the run instead of inflating the success total. The default

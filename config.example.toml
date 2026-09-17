@@ -53,6 +53,12 @@ include_nondollar = true
 # ceiling, QFC's actual account limit, or the available coupons are exhausted.
 fill_to_limit = false
 
+# Skip any coupon whose label contains one of these (case-insensitive substring).
+# Useful because a department can be broader than it sounds — QFC files hair,
+# skin and deodorant products under "Health". Prefer specific terms: bare "hair"
+# also matches "chair", and "shave" matches "shaved parmesan".
+exclude_terms = []
+
 [estimates]
 # Assumed dollar value when a literal "$X off" can't be read. Tune from --dry-run.
 bogo = 5.00

@@ -27,3 +27,7 @@ config.toml
 # Secrets
 .env
 .env.local
+
+# Playwright browser binaries (installed to the user cache by scripts/setup.sh;
+# only land here if PLAYWRIGHT_BROWSERS_PATH is set).
+.playwright/

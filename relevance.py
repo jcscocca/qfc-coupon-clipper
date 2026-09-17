@@ -98,6 +98,25 @@ def rank_candidates(candidates: list[Candidate], min_savings: float = 0.0,
     return out
 
 
+def filter_excluded(candidates: list[Candidate], terms: list[str]) -> list[Candidate]:
+    """Drop candidates whose label contains any excluded term (case-insensitive).
+
+    Applied before ranking so exclusions hold in every phase, including the
+    fill phase that otherwise preserves QFC's own ordering.
+    """
+    return [c for c in candidates if matching_term(c.label, terms) is None]
+
+
+def matching_term(label: str, terms: list[str]) -> str | None:
+    """Return the first excluded term found in `label`, or None."""
+    lowered_label = label.lower()
+    for term in terms:
+        term = (term or "").strip().lower()
+        if term and term in lowered_label:
+            return term
+    return None
+
+
 def match_departments(wanted: list[str], available: list[str]) -> tuple[list[str], list[str]]:
     """Match wanted department names against the panel's available names.
 
@@ -122,6 +141,7 @@ class Config:
     min_savings: float = 0.0
     include_nondollar: bool = True
     fill_to_limit: bool = False
+    exclude_terms: list = field(default_factory=list)
     estimates: Estimates = field(default_factory=Estimates)
 
 
@@ -136,12 +156,16 @@ def load_config(path: "str | Path | None", overrides: "dict | None" = None) -> C
             data = tomllib.load(f)
 
     est = data.get("estimates", {})
+    exclude_terms = data.get("exclude_terms", [])
+    if isinstance(exclude_terms, str):
+        exclude_terms = [exclude_terms]
     cfg = Config(
         departments=list(data.get("departments", [])),
         max_clips=int(data.get("max_clips", 249)),
         min_savings=float(data.get("min_savings", 0.0)),
         include_nondollar=bool(data.get("include_nondollar", True)),
         fill_to_limit=bool(data.get("fill_to_limit", False)),
+        exclude_terms=list(exclude_terms),
         estimates=Estimates(
             bogo=float(est.get("bogo", 5.0)),
             assumed_item_price=float(est.get("assumed_item_price", 4.0)),

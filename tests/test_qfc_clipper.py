@@ -330,7 +330,8 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
     result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
@@ -366,7 +367,8 @@ def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
     result = clipper._clip_relevant(_FakePage(), cfg, budget=3, args=args)
@@ -405,7 +407,8 @@ def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
     result = clipper._clip_relevant(_FakePage(), cfg, budget=3, args=args)
@@ -433,7 +436,8 @@ def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
     attempted = set()
 
@@ -465,7 +469,8 @@ def test_clip_relevant_does_not_count_unconfirmed_clicks(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
 
     result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
@@ -487,7 +492,8 @@ def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
                         lambda page, estimates, debug=False: list(candidates))
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
 
     result = clipper._clip_relevant(
@@ -496,6 +502,31 @@ def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
 
     assert result.planned == 2
     assert out.index("first") < out.index("second")
+
+
+def test_dry_run_lists_coupons_removed_by_exclude_terms(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    candidates = [
+        Candidate("Clip for coupon: Save $4 on 2 OGX coupon", Savings(4.0, "dollar", False)),
+        Candidate("Clip for coupon: Save $1 on Oikos coupon", Savings(1.0, "dollar", False)),
+    ]
+    monkeypatch.setattr(clipper, "collect_candidates",
+                        lambda page, estimates, debug=False: list(candidates))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=["ogx"])
+    args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
+    out = capsys.readouterr().out
+
+    assert result.planned == 1
+    plan, excluded = out.split("excluded by exclude_terms")
+    assert "Oikos" in plan and "OGX" not in plan
+    assert "OGX" in excluded and "[ogx]" in excluded
 
 
 def test_clip_confirmation_matches_changed_action_prefix():
@@ -546,7 +577,8 @@ def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
         lambda page, estimates, debug=False: list(candidates))
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True)
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=[])
     args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
     attempted = set()
 
