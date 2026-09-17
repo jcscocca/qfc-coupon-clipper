@@ -98,6 +98,19 @@ def rank_candidates(candidates: list[Candidate], min_savings: float = 0.0,
     return out
 
 
+def filter_excluded(candidates: list[Candidate], terms: list[str]) -> list[Candidate]:
+    """Drop candidates whose label contains any excluded term (case-insensitive).
+
+    Applied before ranking so exclusions hold in every phase, including the
+    fill phase that otherwise preserves QFC's own ordering.
+    """
+    lowered = [t.strip().lower() for t in terms if t and t.strip()]
+    if not lowered:
+        return list(candidates)
+    return [c for c in candidates
+            if not any(term in c.label.lower() for term in lowered)]
+
+
 def match_departments(wanted: list[str], available: list[str]) -> tuple[list[str], list[str]]:
     """Match wanted department names against the panel's available names.
 
@@ -122,6 +135,7 @@ class Config:
     min_savings: float = 0.0
     include_nondollar: bool = True
     fill_to_limit: bool = False
+    exclude_terms: list = field(default_factory=list)
     estimates: Estimates = field(default_factory=Estimates)
 
 
@@ -142,6 +156,7 @@ def load_config(path: "str | Path | None", overrides: "dict | None" = None) -> C
         min_savings=float(data.get("min_savings", 0.0)),
         include_nondollar=bool(data.get("include_nondollar", True)),
         fill_to_limit=bool(data.get("fill_to_limit", False)),
+        exclude_terms=list(data.get("exclude_terms", [])),
         estimates=Estimates(
             bogo=float(est.get("bogo", 5.0)),
             assumed_item_price=float(est.get("assumed_item_price", 4.0)),

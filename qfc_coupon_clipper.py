@@ -44,7 +44,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 from relevance import (
-    Candidate, Estimates, load_config, parse_savings, rank_candidates,
+    Candidate, Estimates, filter_excluded, load_config, parse_savings,
+    rank_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -682,6 +683,7 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
         dismiss_modal(page, debug=args.debug)
         candidates = collect_candidates(
             page, cfg.estimates, debug=(args.debug and clipped == 0))
+        candidates = filter_excluded(candidates, cfg.exclude_terms)
         if phase == "fill":
             # The unfiltered page is already sorted by QFC relevance/popularity.
             # Preserve that order instead of replacing it with savings ranking.

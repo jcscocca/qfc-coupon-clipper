@@ -187,3 +187,28 @@ def test_plain_thousands_no_comma():
 def test_dollar_wins_when_percent_first():
     s = parse_savings("50% off, $2 coupon", Estimates())
     assert s.kind == "dollar" and s.value == 2.0
+
+
+from relevance import filter_excluded  # noqa: E402
+
+
+def test_filter_excluded_drops_matching_labels():
+    cands = [_mk("Save $4.00 on 2 Mielle Hair Care coupon", 4.0, "dollar", False),
+             _mk("Save $3.00 on Truvia coupon", 3.0, "dollar", False)]
+    kept = filter_excluded(cands, ["hair care"])
+    assert [c.label for c in kept] == ["Save $3.00 on Truvia coupon"]
+
+
+def test_filter_excluded_is_case_insensitive():
+    cands = [_mk("Save $5.00 on 3 Old Spice Deo and Body Wash coupon", 5.0, "dollar", False)]
+    assert filter_excluded(cands, ["OLD SPICE"]) == []
+
+
+def test_filter_excluded_no_terms_is_passthrough():
+    cands = [_mk("a", 1.0, "dollar", False)]
+    assert [c.label for c in filter_excluded(cands, [])] == ["a"]
+
+
+def test_filter_excluded_does_not_match_across_unrelated_words():
+    cands = [_mk("Save $2.00 on Skinny Pop coupon", 2.0, "dollar", False)]
+    assert len(filter_excluded(cands, ["lotion", "shampoo"])) == 1
