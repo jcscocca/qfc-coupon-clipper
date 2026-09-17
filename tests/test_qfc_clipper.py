@@ -504,6 +504,31 @@ def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
     assert out.index("first") < out.index("second")
 
 
+def test_dry_run_lists_coupons_removed_by_exclude_terms(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from relevance import Candidate, Savings
+
+    candidates = [
+        Candidate("Clip for coupon: Save $4 on 2 OGX coupon", Savings(4.0, "dollar", False)),
+        Candidate("Clip for coupon: Save $1 on Oikos coupon", Savings(1.0, "dollar", False)),
+    ]
+    monkeypatch.setattr(clipper, "collect_candidates",
+                        lambda page, estimates, debug=False: list(candidates))
+    monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
+
+    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+                          exclude_terms=["ogx"])
+    args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
+
+    result = clipper._clip_relevant(_FakePage(), cfg, budget=5, args=args)
+    out = capsys.readouterr().out
+
+    assert result.planned == 1
+    plan, excluded = out.split("excluded by exclude_terms")
+    assert "Oikos" in plan and "OGX" not in plan
+    assert "OGX" in excluded and "[ogx]" in excluded
+
+
 def test_clip_confirmation_matches_changed_action_prefix():
     class ConfirmedButton:
         def get_attribute(self, name, timeout=None):

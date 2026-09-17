@@ -44,8 +44,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 from relevance import (
-    Candidate, Estimates, filter_excluded, load_config, parse_savings,
-    rank_candidates,
+    Candidate, Estimates, filter_excluded, load_config, matching_term,
+    parse_savings, rank_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -681,9 +681,9 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
         include_nondollar = cfg.include_nondollar
     while clipped < budget and not limit_hit:
         dismiss_modal(page, debug=args.debug)
-        candidates = collect_candidates(
+        collected = collect_candidates(
             page, cfg.estimates, debug=(args.debug and clipped == 0))
-        candidates = filter_excluded(candidates, cfg.exclude_terms)
+        candidates = filter_excluded(collected, cfg.exclude_terms)
         if phase == "fill":
             # The unfiltered page is already sorted by QFC relevance/popularity.
             # Preserve that order instead of replacing it with savings ranking.
@@ -707,6 +707,13 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
                 est = " (est)" if c.savings.estimated else ""
                 log(f"  ${c.savings.value:>6.2f}{est:<6} {c.savings.kind:<7} {c.label!r}")
                 clicked_keys.add(c.label)
+            excluded = [(c, matching_term(c.label, cfg.exclude_terms))
+                        for c in collected]
+            excluded = [(c, term) for c, term in excluded if term]
+            if excluded:
+                log(f"\n[dry-run] {phase} excluded by exclude_terms ({len(excluded)}):")
+                for c, term in excluded:
+                    log(f"  [{term}] {c.label!r}")
             return ClipResult(clipped=0, planned=len(plan),
                               exhausted=len(plan) < budget)
 

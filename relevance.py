@@ -104,11 +104,17 @@ def filter_excluded(candidates: list[Candidate], terms: list[str]) -> list[Candi
     Applied before ranking so exclusions hold in every phase, including the
     fill phase that otherwise preserves QFC's own ordering.
     """
-    lowered = [t.strip().lower() for t in terms if t and t.strip()]
-    if not lowered:
-        return list(candidates)
-    return [c for c in candidates
-            if not any(term in c.label.lower() for term in lowered)]
+    return [c for c in candidates if matching_term(c.label, terms) is None]
+
+
+def matching_term(label: str, terms: list[str]) -> str | None:
+    """Return the first excluded term found in `label`, or None."""
+    lowered_label = label.lower()
+    for term in terms:
+        term = (term or "").strip().lower()
+        if term and term in lowered_label:
+            return term
+    return None
 
 
 def match_departments(wanted: list[str], available: list[str]) -> tuple[list[str], list[str]]:
