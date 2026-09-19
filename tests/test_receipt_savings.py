@@ -151,3 +151,61 @@ def test_missing_purchases_error_distinguishes_incomplete_authentication():
     assert "ledger was not updated" in str(missing_purchases_error(LoginPage()))
     assert str(missing_purchases_error(PurchasesPage())) == (
         "no purchases were found on My Purchases")
+
+
+def test_receipt_wait_keeps_polling_through_login_navigation(monkeypatch):
+    from playwright.sync_api import Error as PWError
+
+    class Page:
+        url = "https://login.kroger.com/signin"
+
+        def is_closed(self):
+            return False
+
+    def discover(page):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    results = iter([
+        PWError("Locator.evaluate_all: Execution context was destroyed, "
+                "most likely because of a navigation"),
+        [("2026-09-16", "https://www.qfc.com/detail")],
+    ])
+    monkeypatch.setattr(receipt_importer, "discover_purchase_urls", discover)
+    monkeypatch.setattr(receipt_importer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(receipt_importer.time, "monotonic", lambda: 0.0)
+
+    assert wait_for_purchases(Page(), timeout=10)[0][0] == "2026-09-16"
+
+
+def test_receipt_wait_stops_when_browser_is_closed(monkeypatch):
+    from playwright.sync_api import Error as PWError
+
+    class Page:
+        url = "https://login.kroger.com/signin"
+
+        def is_closed(self):
+            return True
+
+    def discover(page):
+        raise PWError("Target page, context or browser has been closed")
+
+    monkeypatch.setattr(receipt_importer, "discover_purchase_urls", discover)
+    monkeypatch.setattr(receipt_importer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(receipt_importer.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(PWError):
+        wait_for_purchases(Page(), timeout=10)
+
+
+@pytest.mark.parametrize("label, expected", [
+    ("July 20, 2026", "2026-07-20"),
+    ("Aug. 30, 2026", "2026-08-30"),
+    ("Sept. 16, 2026", "2026-09-16"),
+    ("Dec. 1, 2026", "2026-12-01"),
+])
+def test_parse_receipt_accepts_abbreviated_order_dates(label, expected):
+    text = RECEIPT_TEXT.replace("Order Date: July 20, 2026", f"Order Date: {label}")
+    assert parse_receipt_text(text).order_date == expected

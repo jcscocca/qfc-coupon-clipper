@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urljoin
 
+from playwright.sync_api import Error as PWError
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
@@ -54,7 +55,13 @@ def wait_for_purchases(
     deadline = time.monotonic() + timeout
     prompted = False
     while time.monotonic() < deadline:
-        purchases = discover_purchase_urls(page)
+        try:
+            purchases = discover_purchase_urls(page)
+        except PWError:
+            # Sign-in redirects destroy the page's execution context mid-read.
+            if page.is_closed():
+                raise
+            purchases = []
         if purchases:
             return purchases
         if is_login_page(page) and not allow_interactive_login:
