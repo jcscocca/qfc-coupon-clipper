@@ -113,8 +113,10 @@ def parse_receipt_text(text: str, source_url: str = "") -> ReceiptSavings:
         raise ReceiptParseError("receipt text is empty")
 
     date_label = _inline_value(text, "Order Date")
-    # QFC uses AP-style abbreviations ("Aug. 30", "Sept. 16") for some months.
-    normalized = date_label.replace(".", "").replace("Sept ", "Sep ")
+    # QFC uses AP-style abbreviations, sometimes without spaces ("Sept.16,2026").
+    normalized = date_label.replace(".", "")
+    normalized = re.sub(r"([A-Za-z])(?=\d)", r"\1 ", normalized)
+    normalized = re.sub(r",\s*", ", ", normalized).replace("Sept ", "Sep ")
     for fmt in ("%B %d, %Y", "%b %d, %Y"):
         try:
             order_date = datetime.strptime(normalized, fmt).date().isoformat()

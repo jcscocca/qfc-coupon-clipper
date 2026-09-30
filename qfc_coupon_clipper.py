@@ -593,6 +593,69 @@ def clear_filters(page, debug=False):
     return False
 
 
+
+_FILTER_READY_TIMEOUT = 20.0
+_COUPON_OUTAGE_RE = re.compile(
+    r"(?:intermittent\s+problems\s+with\s+digital\s+coupons"
+    r"|digital\s+coupons.{0,60}(?:unavailable|experiencing\s+problems))", re.I)
+
+
+def _visible_coupon_outage(page):
+    try:
+        notices = page.get_by_text(_COUPON_OUTAGE_RE)
+        return any(notices.nth(i).is_visible() for i in range(notices.count()))
+    except Exception:
+        return False
+
+
+def wait_for_department_filters(page, wanted, *, timeout=None, poll=0.5):
+    """Wait for complete, enabled facets; never force clicks through loading.
+
+    One bounded deadline covers all requested departments. Polling also allows
+    the browser to process filter responses before the next selection.
+    """
+    timeout = _FILTER_READY_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
+    while True:
+        if _visible_coupon_outage(page):
+            log("ERROR: QFC reports digital-coupon problems; run incomplete.")
+            return False
+        try:
+            headings = page.get_by_text("Departments", exact=True)
+            checks = page.get_by_role("checkbox")
+            busy = page.get_by_role("progressbar")
+            ready = (headings.count() > 0 and headings.first.is_visible()
+                     and checks.count() > 0
+                     and not any(busy.nth(i).is_visible()
+                                 for i in range(busy.count())))
+            if ready:
+                for i in range(checks.count()):
+                    check = checks.nth(i)
+                    if check.is_visible() and not check.is_enabled(timeout=1000):
+                        ready = False
+                        break
+            if ready:
+                for name in wanted:
+                    options = page.get_by_role("checkbox", name=re.compile(
+                        rf"^(?:CATEGORIES,\s*)?{re.escape(name)}$", re.I))
+                    if not any(options.nth(i).is_visible()
+                               and options.nth(i).is_enabled(timeout=1000)
+                               for i in range(options.count())):
+                        ready = False
+                        break
+            if ready:
+                return True
+        except Exception:
+            # Filters can be replaced while an asynchronous response renders.
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log("ERROR: coupon filters stayed loading, disabled, or incomplete; "
+                "run incomplete.")
+            return False
+        page.wait_for_timeout(min(poll, remaining) * 1000)
+
+
 def select_departments(page, wanted, debug=False):
     """Tick the requested departments in the left Departments panel.
 
@@ -605,15 +668,12 @@ def select_departments(page, wanted, debug=False):
     facets' "Clear All" buttons, so from the reset state each click checks it.
     Returns (matched, missing).
     """
-    # Wait for the filter panel to render.
-    try:
-        page.get_by_text("Departments", exact=True).first.wait_for(timeout=20000)
-    except Exception:
-        log("  Departments panel did not appear in time", debug=debug,
-            is_debug_only=True)
-
-    # Reset any previously-applied filters (one "Clear All" per facet section).
-    clear_filters(page, debug=debug)
+    if not wait_for_department_filters(page, []):
+        return [], list(wanted)
+    if not clear_filters(page, debug=debug):
+        return [], list(wanted)
+    if not wait_for_department_filters(page, wanted):
+        return [], list(wanted)
 
     matched, missing = [], []
     for name in wanted:
@@ -623,16 +683,20 @@ def select_departments(page, wanted, debug=False):
         # instead of permanently losing that department to the render race.
         for _ in range(3):
             try:
-                target = _find_department_option(page, name)
+                target = _find_department_option(page, name, timeout=2.0)
                 if target is None:
                     break
                 target.scroll_into_view_if_needed(timeout=3000)
-                target.click()
+                target.click(timeout=2000)
                 human_pause(0.4, 0.8)
+                if not wait_for_department_filters(page, wanted):
+                    return matched, [item for item in wanted if item not in matched]
                 selected = True
                 break
             except Exception as e:
                 last_error = e
+                if not wait_for_department_filters(page, wanted):
+                    return matched, [item for item in wanted if item not in matched]
                 human_pause(0.2, 0.4)
         if selected:
             matched.append(name)
@@ -640,7 +704,7 @@ def select_departments(page, wanted, debug=False):
             if last_error is not None:
                 log(f"  could not select {name!r}: {last_error}", debug=debug,
                     is_debug_only=True)
-            missing.append(name)
+            return matched, [item for item in wanted if item not in matched]
 
     human_pause(1.0, 2.0)  # let the filtered list refresh
     if debug:
@@ -819,6 +883,12 @@ def _load_verified_unfiltered_list(page, args, *, expected_total, attempts=3):
 
 def _run_relevance_mode(page, cfg, args):
     """Clip preferred departments first, then optionally fill unused capacity."""
+    if not wait_for_department_filters(page, []):
+        if detect_logged_out(page):
+            warn_no_coupons(page)
+            return 2
+        log("Stopped incomplete. Confirmed 0 coupon(s); no clips attempted.")
+        return 3
     if not clear_filters(page, debug=args.debug):
         log("ERROR: could not clear persisted coupon filters; account-wide "
             "capacity cannot be calculated safely.")
@@ -857,7 +927,9 @@ def _run_relevance_mode(page, cfg, args):
 
     matched, missing = select_departments(page, cfg.departments, debug=args.debug)
     if missing:
-        log(f"WARNING: these configured departments were not found: {missing}")
+        log(f"ERROR: could not select every configured department: {missing}; "
+            "run incomplete. Confirmed 0 coupon(s); no clips attempted.")
+        return 3
     if not matched:
         log("ERROR: none of the configured departments matched the panel; "
             "aborting (set departments to valid names).")
@@ -866,6 +938,9 @@ def _run_relevance_mode(page, cfg, args):
 
     log("Loading preferred coupons...")
     _load_full_coupon_list(page, args)
+    if not wait_for_department_filters(page, cfg.departments):
+        log("Stopped incomplete. Confirmed 0 coupon(s); no clips attempted.")
+        return 3
     clicked_keys = set()
     preferred = _clip_relevant(
         page, cfg, budget, args, clicked_keys=clicked_keys,
@@ -906,6 +981,11 @@ def _run_relevance_mode(page, cfg, args):
                 limit_hit = fill.limit_hit
                 failed += fill.failed
                 confirmation_blocked = fill.confirmation_blocked
+
+    if not wait_for_department_filters(page, cfg.departments):
+        log(f"Stopped incomplete. Confirmed {0 if args.dry_run else total_used} "
+            f"coupon(s); {failed} attempted clip(s) were not confirmed.")
+        return 3
 
     log("\n" + "-" * 40)
     if args.dry_run:
