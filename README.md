@@ -190,12 +190,18 @@ selecting them and after each selection. If a configured department remains
 unavailable, controls stay disabled, or QFC displays its digital-coupon outage
 warning, it reports an incomplete run (status `3`) instead of successful zero
 clipping. It does not clip a partial set of configured departments. Any already
-confirmed clips are still reported separately from unconfirmed attempts.
+confirmed clips are still reported separately from unconfirmed attempts. The
+complete requested selection is verified after filter refreshes and before each
+preferred clip. Readiness failures or outage warnings stop further attempts in
+both clipping phases. A skipped or unverified fill phase also exits with status
+`3`, retaining the confirmed count in the run log.
 
 ## Tests
 
 The selector/parsing helpers and isolated Chromium filter fixtures have `pytest`
-coverage. Browser fixtures block outbound requests and use temporary contexts;
+coverage. GitHub Actions runs separate unit and Chromium jobs on pull requests
+and pushes to `main`, without account credentials or a saved QFC profile.
+Browser fixtures block outbound requests and use temporary contexts;
 they never use your QFC profile or account. Install the test browser with
 `python -m playwright install chromium` if it is not already available:
 

@@ -309,6 +309,8 @@ class _FakePage:
 
 
 def test_clip_relevant_never_double_clicks(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -330,7 +332,7 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
@@ -344,6 +346,8 @@ def test_clip_relevant_never_double_clicks(monkeypatch):
 
 
 def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -367,7 +371,7 @@ def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
@@ -381,6 +385,8 @@ def test_clip_relevant_rescans_before_declaring_exhaustion(monkeypatch):
 
 
 def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -407,7 +413,7 @@ def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
 
@@ -417,6 +423,8 @@ def test_clip_relevant_recovers_after_two_stalled_rescans(monkeypatch):
 
 
 def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -436,7 +444,7 @@ def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: True)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, max=0, min_delay=0, max_delay=0)
     attempted = set()
@@ -454,6 +462,8 @@ def test_clip_relevant_shares_attempted_labels_between_phases(monkeypatch):
 
 
 def test_clip_relevant_does_not_count_unconfirmed_clicks(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -469,7 +479,7 @@ def test_clip_relevant_does_not_count_unconfirmed_clicks(monkeypatch):
     monkeypatch.setattr(clipper, "_wait_for_clip_confirmation",
                         lambda page, locator, label: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=False, debug=False, min_delay=0, max_delay=0)
 
@@ -481,6 +491,8 @@ def test_clip_relevant_does_not_count_unconfirmed_clicks(monkeypatch):
 
 
 def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -492,7 +504,7 @@ def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
                         lambda page, estimates, debug=False: list(candidates))
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
 
@@ -505,6 +517,8 @@ def test_fill_phase_preserves_qfc_page_order(monkeypatch, capsys):
 
 
 def test_dry_run_lists_coupons_removed_by_exclude_terms(monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -516,7 +530,7 @@ def test_dry_run_lists_coupons_removed_by_exclude_terms(monkeypatch, capsys):
                         lambda page, estimates, debug=False: list(candidates))
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=["ogx"])
     args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
 
@@ -565,6 +579,8 @@ def test_clip_confirmation_finds_replacement_after_locator_rename():
 
 
 def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
     from relevance import Candidate, Savings
 
@@ -577,7 +593,7 @@ def test_clip_relevant_dry_run_deduplicates_phase_plans(monkeypatch):
         lambda page, estimates, debug=False: list(candidates))
     monkeypatch.setattr(clipper, "dismiss_modal", lambda page, debug=False: False)
 
-    cfg = SimpleNamespace(estimates=None, min_savings=0.0, include_nondollar=True,
+    cfg = SimpleNamespace(departments=["Dairy"], estimates=None, min_savings=0.0, include_nondollar=True,
                           exclude_terms=[])
     args = SimpleNamespace(dry_run=True, debug=False, min_delay=0, max_delay=0)
     attempted = set()
@@ -889,8 +905,7 @@ def test_relevance_mode_reports_clips_when_fill_clear_fails(monkeypatch, capsys)
     from types import SimpleNamespace
 
     # Initial clear succeeds; the pre-fill clear fails after preferred coupons
-    # were already clipped. The run must report those clips and succeed, not
-    # discard them behind a hard-failure exit code.
+    # were already clipped. Preserve the confirmed count and return incomplete.
     clear_results = iter([True, False])
     monkeypatch.setattr(clipper, "clear_filters",
                         lambda page, debug=False: next(clear_results))
@@ -911,8 +926,8 @@ def test_relevance_mode_reports_clips_when_fill_clear_fails(monkeypatch, capsys)
 
     rc = clipper._run_relevance_mode(_RunPage(), cfg, args)
     out = capsys.readouterr().out
-    assert rc == 0
-    assert "Clipped 68" in out
+    assert rc == 3
+    assert "Confirmed 68" in out
 
 
 def test_relevance_mode_scheduled_signed_out_warns(monkeypatch, capsys):
@@ -992,45 +1007,79 @@ def test_find_department_option_times_out(monkeypatch):
 
 
 def test_select_departments_retries_detached_row(monkeypatch):
-    class Heading:
-        first = None
-
-        def __init__(self):
-            self.first = self
-
-        def wait_for(self, timeout=None):
-            pass
-
-    class Page:
-        def get_by_text(self, text, exact=False):
-            assert (text, exact) == ("Departments", True)
-            return Heading()
-
     class StaleTarget:
+        def is_visible(self):
+            return True
+
         def scroll_into_view_if_needed(self, timeout=None):
             raise RuntimeError("Element is not attached to the DOM")
 
     class LiveTarget:
-        clicked = False
+        checked = False
+
+        def is_visible(self):
+            return True
 
         def scroll_into_view_if_needed(self, timeout=None):
             pass
 
-        def click(self, timeout=None):
-            self.clicked = True
+        def check(self, timeout=None):
+            self.checked = True
 
     live = LiveTarget()
     targets = iter([StaleTarget(), live])
+
+    class Options:
+        def __init__(self, target):
+            self.target = target
+
+        def count(self):
+            return 1
+
+        def nth(self, index):
+            return self.target
+
+    class Page:
+        def get_by_role(self, role, name):
+            assert role == "checkbox"
+            assert name.match("CATEGORIES, Frozen")
+            return Options(next(targets))
+
     monkeypatch.setattr(clipper, "wait_for_department_filters",
                         lambda *args, **kwargs: True)
-    monkeypatch.setattr(clipper, "_find_department_option",
-                        lambda page, name, **kwargs: next(targets))
     monkeypatch.setattr(clipper, "clear_filters",
                         lambda page, debug=False: True)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
 
     matched, missing = clipper.select_departments(Page(), ["Frozen"])
-
     assert matched == ["Frozen"]
     assert missing == []
-    assert live.clicked is True
+    assert live.checked is True
+
+
+@pytest.mark.parametrize("incomplete_phase", ["preferred", "fill"])
+def test_relevance_mode_propagates_incomplete_phase_counts(monkeypatch, capsys, incomplete_phase):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(clipper, "wait_for_department_filters", lambda *a, **kw: True)
+    monkeypatch.setattr(clipper, "clear_filters", lambda *a, **kw: True)
+    monkeypatch.setattr(clipper, "_load_full_coupon_list", lambda *a: None)
+    monkeypatch.setattr(clipper, "scan_coupon_buttons", lambda *a: (100, 49))
+    monkeypatch.setattr(clipper, "select_departments", lambda *a, **kw: (["Dairy"], []))
+    monkeypatch.setattr(clipper, "_load_verified_unfiltered_list", lambda *a, **kw: (True, 98, 51))
+    phases = []
+    def clip(*a, **kwargs):
+        phases.append(kwargs["phase"])
+        return clipper.ClipResult(clipped=2, failed=1,
+                                  exhausted=kwargs["phase"] != incomplete_phase,
+                                  incomplete=kwargs["phase"] == incomplete_phase)
+    monkeypatch.setattr(clipper, "_clip_relevant", clip)
+    cfg = SimpleNamespace(departments=["Dairy"], max_clips=249,
+                          min_savings=0, include_nondollar=True, fill_to_limit=True)
+    args = SimpleNamespace(dry_run=False, debug=False, max=0)
+    assert clipper._run_relevance_mode(_RunPage(), cfg, args) == 3
+    expected_phases = ["preferred"] if incomplete_phase == "preferred" else ["preferred", "fill"]
+    assert phases == expected_phases
+    output = capsys.readouterr().out
+    assert f"Confirmed {2 * len(phases)} coupon(s); {len(phases)} attempted clip(s) were not confirmed" in output
+    assert "Done. Clipped" not in output

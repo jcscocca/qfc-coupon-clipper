@@ -99,6 +99,7 @@ class ClipResult:
     planned: int = 0
     failed: int = 0
     confirmation_blocked: bool = False
+    incomplete: bool = False
 
 
 def log(msg, *, debug=False, is_debug_only=False):
@@ -608,11 +609,12 @@ def _visible_coupon_outage(page):
         return False
 
 
-def wait_for_department_filters(page, wanted, *, timeout=None, poll=0.5):
+def wait_for_department_filters(page, wanted, *, selected=(), timeout=None, poll=0.5):
     """Wait for complete, enabled facets; never force clicks through loading.
 
     One bounded deadline covers all requested departments. Polling also allows
-    the browser to process filter responses before the next selection.
+    the browser to process filter responses before the next selection. Names in
+    selected must also remain checked after a response replaces the filter DOM.
     """
     timeout = _FILTER_READY_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + timeout
@@ -640,6 +642,7 @@ def wait_for_department_filters(page, wanted, *, timeout=None, poll=0.5):
                         rf"^(?:CATEGORIES,\s*)?{re.escape(name)}$", re.I))
                     if not any(options.nth(i).is_visible()
                                and options.nth(i).is_enabled(timeout=1000)
+                               and (name not in selected or options.nth(i).is_checked())
                                for i in range(options.count())):
                         ready = False
                         break
@@ -650,8 +653,8 @@ def wait_for_department_filters(page, wanted, *, timeout=None, poll=0.5):
             pass
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            log("ERROR: coupon filters stayed loading, disabled, or incomplete; "
-                "run incomplete.")
+            log("ERROR: coupon filters stayed loading, disabled, incomplete, "
+                "or lost requested selections; run incomplete.")
             return False
         page.wait_for_timeout(min(poll, remaining) * 1000)
 
@@ -659,13 +662,9 @@ def wait_for_department_filters(page, wanted, *, timeout=None, poll=0.5):
 def select_departments(page, wanted, debug=False):
     """Tick the requested departments in the left Departments panel.
 
-    The coupons page is a single-page app that renders the filter panel after
-    load (its network never goes idle), so we first wait for the panel. Each
-    department is a <label>-wrapped checkbox whose only bare visible text is the
-    department name — coupon cards carry longer descriptions — so we target each
-    by an exact, case-insensitive text match and click it (clicking the label's
-    text toggles the checkbox). Persisted selections are cleared first via the
-    facets' "Clear All" buttons, so from the reset state each click checks it.
+    Use named checkbox controls and idempotent checks because filter responses
+    can replace the DOM. Verify earlier selections survive each refresh, then
+    verify the complete requested selection before returning success.
     Returns (matched, missing).
     """
     if not wait_for_department_filters(page, []):
@@ -683,14 +682,18 @@ def select_departments(page, wanted, debug=False):
         # instead of permanently losing that department to the render race.
         for _ in range(3):
             try:
-                target = _find_department_option(page, name, timeout=2.0)
+                options = page.get_by_role("checkbox", name=re.compile(
+                    rf"^(?:CATEGORIES,\s*)?{re.escape(name)}$", re.I))
+                target = next((options.nth(i) for i in range(options.count())
+                               if options.nth(i).is_visible()), None)
                 if target is None:
                     break
                 target.scroll_into_view_if_needed(timeout=3000)
-                target.click(timeout=2000)
+                target.check(timeout=2000)
                 human_pause(0.4, 0.8)
-                if not wait_for_department_filters(page, wanted):
-                    return matched, [item for item in wanted if item not in matched]
+                if not wait_for_department_filters(
+                        page, wanted, selected=matched + [name]):
+                    return [], list(wanted)
                 selected = True
                 break
             except Exception as e:
@@ -707,6 +710,8 @@ def select_departments(page, wanted, debug=False):
             return matched, [item for item in wanted if item not in matched]
 
     human_pause(1.0, 2.0)  # let the filtered list refresh
+    if not wait_for_department_filters(page, wanted, selected=wanted):
+        return [], list(wanted)
     if debug:
         log(f"  [debug] departments matched={matched} missing={missing}",
             debug=debug)
@@ -743,7 +748,11 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
         min_savings = cfg.min_savings
     if include_nondollar is None:
         include_nondollar = cfg.include_nondollar
+    wanted = cfg.departments if phase == "preferred" else []
     while clipped < budget and not limit_hit:
+        if not wait_for_department_filters(page, wanted, selected=wanted):
+            return ClipResult(clipped=clipped, exhausted=False, failed=failed,
+                              incomplete=True)
         dismiss_modal(page, debug=args.debug)
         collected = collect_candidates(
             page, cfg.estimates, debug=(args.debug and clipped == 0))
@@ -792,6 +801,9 @@ def _clip_relevant(page, cfg, budget, args, *, clicked_keys=None,
                     continue
                 c.locator.scroll_into_view_if_needed(timeout=3000)
                 human_pause(0.3, 0.8)
+                if not wait_for_department_filters(page, wanted, selected=wanted):
+                    return ClipResult(clipped=clipped, exhausted=False, failed=failed,
+                                      incomplete=True)
                 c.locator.click(timeout=5000)
                 clicked_keys.add(c.label)
                 if _visible_limit_warning(page):
@@ -938,7 +950,8 @@ def _run_relevance_mode(page, cfg, args):
 
     log("Loading preferred coupons...")
     _load_full_coupon_list(page, args)
-    if not wait_for_department_filters(page, cfg.departments):
+    if not wait_for_department_filters(
+            page, cfg.departments, selected=cfg.departments):
         log("Stopped incomplete. Confirmed 0 coupon(s); no clips attempted.")
         return 3
     clicked_keys = set()
@@ -953,7 +966,14 @@ def _run_relevance_mode(page, cfg, args):
     failed = preferred.failed
     confirmation_blocked = preferred.confirmation_blocked
 
+    if preferred.incomplete:
+        log(f"Stopped incomplete. Confirmed {0 if args.dry_run else total_used} "
+            f"coupon(s); {failed} attempted clip(s) were not confirmed.")
+        return 3
+
     fill_skip_reason = None
+    incomplete = False
+    filters_cleared_for_fill = False
     remaining = max(0, budget - total_used)
     if (cfg.fill_to_limit and remaining and not limit_hit
             and not confirmation_blocked):
@@ -964,6 +984,7 @@ def _run_relevance_mode(page, cfg, args):
                 "phase (preferred clips are kept).")
             fill_skip_reason = "department filters could not be cleared"
         else:
+            filters_cleared_for_fill = True
             verified, fill_n_clip, fill_n_clipped = _load_verified_unfiltered_list(
                 page, args, expected_total=n_clip + n_clipped)
             if not verified:
@@ -981,8 +1002,11 @@ def _run_relevance_mode(page, cfg, args):
                 limit_hit = fill.limit_hit
                 failed += fill.failed
                 confirmation_blocked = fill.confirmation_blocked
+                incomplete = fill.incomplete
 
-    if not wait_for_department_filters(page, cfg.departments):
+    selected = [] if filters_cleared_for_fill else cfg.departments
+    if incomplete or not wait_for_department_filters(
+            page, cfg.departments, selected=selected):
         log(f"Stopped incomplete. Confirmed {0 if args.dry_run else total_used} "
             f"coupon(s); {failed} attempted clip(s) were not confirmed.")
         return 3
@@ -1002,7 +1026,8 @@ def _run_relevance_mode(page, cfg, args):
         log(f"Done. Clipped {total_used} coupon(s); all coupons that were "
             "available at the start of the run were processed.")
     elif fill_skip_reason:
-        log(f"Done. Clipped {total_used} coupon(s); fill phase incomplete because "
+        log(f"Stopped incomplete. Confirmed {total_used} coupon(s); "
+            "fill phase incomplete because "
             f"{fill_skip_reason} ({budget - total_used} capacity unused).")
     elif not cfg.fill_to_limit:
         log(f"Done. Clipped {total_used} coupon(s); preferred coupons were "
@@ -1013,6 +1038,8 @@ def _run_relevance_mode(page, cfg, args):
     if failed and not confirmation_blocked:
         log(f"NOTE: {failed} attempted coupon(s) were not confirmed and were "
             "not included in the clipped total.")
+    if fill_skip_reason:
+        return 3
     return 4 if ((limit_hit or confirmation_blocked) and total_used == 0) else 0
 
 
