@@ -113,10 +113,18 @@ def parse_receipt_text(text: str, source_url: str = "") -> ReceiptSavings:
         raise ReceiptParseError("receipt text is empty")
 
     date_label = _inline_value(text, "Order Date")
-    try:
-        order_date = datetime.strptime(date_label, "%B %d, %Y").date().isoformat()
-    except ValueError as exc:
-        raise ReceiptParseError(f"unrecognized order date: {date_label!r}") from exc
+    # QFC uses AP-style abbreviations, sometimes without spaces ("Sept.16,2026").
+    normalized = date_label.replace(".", "")
+    normalized = re.sub(r"([A-Za-z])(?=\d)", r"\1 ", normalized)
+    normalized = re.sub(r",\s*", ", ", normalized).replace("Sept ", "Sep ")
+    for fmt in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            order_date = datetime.strptime(normalized, fmt).date().isoformat()
+            break
+        except ValueError:
+            continue
+    else:
+        raise ReceiptParseError(f"unrecognized order date: {date_label!r}")
 
     savings = abs(_inline_money(text, "Total Savings"))
     item_coupon_sales = abs(_money_after_label(text, "Item Coupons/Sales"))

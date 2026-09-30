@@ -185,9 +185,19 @@ If QFC logs your saved session out, a scheduled run exits with a clear "re-login
 needed" message (status `2`) instead of silently clipping nothing — open the script
 once and sign back in to refresh it. Running weekly usually keeps the session alive.
 
+The clipper waits up to 20 seconds for complete, enabled department filters before
+selecting them and after each selection. If a configured department remains
+unavailable, controls stay disabled, or QFC displays its digital-coupon outage
+warning, it reports an incomplete run (status `3`) instead of successful zero
+clipping. It does not clip a partial set of configured departments. Any already
+confirmed clips are still reported separately from unconfirmed attempts.
+
 ## Tests
 
-The pure selector/parsing helpers have `pytest` coverage (no browser is launched):
+The selector/parsing helpers and isolated Chromium filter fixtures have `pytest`
+coverage. Browser fixtures block outbound requests and use temporary contexts;
+they never use your QFC profile or account. Install the test browser with
+`python -m playwright install chromium` if it is not already available:
 
 ```bash
 source .venv/bin/activate

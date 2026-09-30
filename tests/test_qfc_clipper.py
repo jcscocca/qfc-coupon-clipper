@@ -740,6 +740,8 @@ def test_verified_unfiltered_load_reports_incomplete_inventory(monkeypatch):
 
 
 def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypatch):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     events = []
@@ -792,6 +794,8 @@ def test_relevance_mode_counts_unfiltered_then_fills_remaining_capacity(monkeypa
 
 def test_relevance_mode_max_limits_confirmed_coupons_for_this_run(
         monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     budgets = []
@@ -822,6 +826,8 @@ def test_relevance_mode_max_limits_confirmed_coupons_for_this_run(
 
 def test_relevance_mode_without_assumed_cap_uses_clippable_count(
         monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     budgets = []
@@ -852,6 +858,8 @@ def test_relevance_mode_without_assumed_cap_uses_clippable_count(
 
 def test_relevance_mode_without_fill_reports_preferred_exhaustion(
         monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     monkeypatch.setattr(clipper, "clear_filters",
@@ -876,6 +884,8 @@ def test_relevance_mode_without_fill_reports_preferred_exhaustion(
 
 
 def test_relevance_mode_reports_clips_when_fill_clear_fails(monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     # Initial clear succeeds; the pre-fill clear fails after preferred coupons
@@ -906,6 +916,8 @@ def test_relevance_mode_reports_clips_when_fill_clear_fails(monkeypatch, capsys)
 
 
 def test_relevance_mode_scheduled_signed_out_warns(monkeypatch, capsys):
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     from types import SimpleNamespace
 
     # A scheduled run whose session expired: the unfiltered scan finds nothing.
@@ -1004,13 +1016,15 @@ def test_select_departments_retries_detached_row(monkeypatch):
         def scroll_into_view_if_needed(self, timeout=None):
             pass
 
-        def click(self):
+        def click(self, timeout=None):
             self.clicked = True
 
     live = LiveTarget()
     targets = iter([StaleTarget(), live])
+    monkeypatch.setattr(clipper, "wait_for_department_filters",
+                        lambda *args, **kwargs: True)
     monkeypatch.setattr(clipper, "_find_department_option",
-                        lambda page, name: next(targets))
+                        lambda page, name, **kwargs: next(targets))
     monkeypatch.setattr(clipper, "clear_filters",
                         lambda page, debug=False: True)
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
