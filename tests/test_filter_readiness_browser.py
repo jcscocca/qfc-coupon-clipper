@@ -32,8 +32,8 @@ def page(chromium, monkeypatch):
     monkeypatch.setattr(clipper, "human_pause", lambda lo, hi: None)
     original_wait = clipper.wait_for_department_filters
     monkeypatch.setattr(clipper, "wait_for_department_filters",
-                        lambda page, wanted: original_wait(
-                            page, wanted, timeout=0.7, poll=0.02))
+                        lambda page, wanted, **kwargs: original_wait(
+                            page, wanted, timeout=0.7, poll=0.02, **kwargs))
     yield page
     context.close()
 
@@ -133,3 +133,120 @@ def test_outage_after_clipping_preserves_confirmed_and_unconfirmed_counts(page, 
     output = capsys.readouterr().out
     assert "Confirmed 2 coupon(s); 1 attempted clip(s) were not confirmed" in output
     assert "Done. Clipped" not in output
+
+
+def test_replaced_filter_dom_preserves_complete_selection(page):
+    filters(page)
+    page.evaluate('''() => {
+        document.querySelector('#filters').onchange=() => {
+            document.querySelector('#busy').hidden=false;
+            document.querySelectorAll('input').forEach(input=>input.disabled=true);
+            setTimeout(()=>{
+                const panel=document.querySelector('#filters');
+                panel.replaceChildren(...Array.from(panel.children, child=>child.cloneNode(true)));
+                document.querySelectorAll('input').forEach(input=>input.disabled=false);
+                document.querySelector('#busy').hidden=true;
+            },40);
+        };
+    }''')
+    assert clipper.select_departments(page, DEPARTMENTS) == (DEPARTMENTS, [])
+    assert page.get_by_role('checkbox', checked=True).count() == 13
+
+
+def test_refresh_losing_prior_selections_stops_before_clipping(page, monkeypatch, capsys):
+    filters(page)
+    page.evaluate('''() => {
+        document.querySelector('#filters').onchange=event=>{
+            document.querySelectorAll('input').forEach(input=>{
+                if (input!==event.target) input.checked=false;
+            });
+        };
+    }''')
+    monkeypatch.setattr(clipper, '_load_full_coupon_list', lambda *a: None)
+    assert clipper._run_relevance_mode(page, config(), args()) == 3
+    assert page.evaluate('window.couponClicks') == 0
+    assert 'could not select every configured department' in capsys.readouterr().out
+
+
+def test_selection_lost_during_grid_load_stops_before_clipping(page, monkeypatch):
+    filters(page)
+    loads = []
+    def load(*a):
+        loads.append(1)
+        if len(loads) == 2:
+            page.get_by_role('checkbox').first.evaluate('input=>input.checked=false')
+    monkeypatch.setattr(clipper, '_load_full_coupon_list', load)
+    assert clipper._run_relevance_mode(page, config(), args()) == 3
+    assert page.evaluate('window.couponClicks') == 0
+
+
+@pytest.mark.parametrize('phase,condition', [
+    ('preferred', 'outage'), ('preferred', 'disabled'),
+    ('preferred', 'selection'), ('fill', 'outage'), ('fill', 'disabled'),
+])
+@pytest.mark.parametrize('confirmed', [True, False])
+def test_mid_phase_failure_stops_further_attempts(page, monkeypatch, phase, condition, confirmed):
+    filters(page)
+    if phase == 'preferred':
+        assert clipper.select_departments(page, DEPARTMENTS) == (DEPARTMENTS, [])
+    page.evaluate('''({condition,confirmed})=>{
+        const first=document.querySelector('#coupon');
+        first.insertAdjacentHTML('afterend', '<button aria-label="Clip for coupon: Save $2.00 on Bread coupon">Clip</button>');
+        document.querySelectorAll('button').forEach(button=>button.onclick=()=>{
+            window.couponClicks++;
+            if (confirmed) button.setAttribute('aria-label',button.getAttribute('aria-label').replace(/^Clip /,'Unclip '));
+            if (condition==='outage') document.querySelector('main').insertAdjacentHTML('afterbegin','<p>We’re currently experiencing intermittent problems with Digital coupons.</p>');
+            if (condition==='disabled') document.querySelectorAll('input').forEach(input=>input.disabled=true);
+            if (condition==='selection') document.querySelector('input').checked=false;
+        });
+    }''', {'condition': condition, 'confirmed': confirmed})
+    original = clipper._wait_for_clip_confirmation
+    monkeypatch.setattr(clipper, '_wait_for_clip_confirmation',
+                        lambda *a: original(*a, timeout=0))
+    result = clipper._clip_relevant(page, config(), 3, args(), phase=phase)
+    assert page.evaluate('window.couponClicks') == 1
+    assert result.incomplete is True
+    assert result.exhausted is False
+    assert result.clipped == int(confirmed)
+    assert result.failed == int(not confirmed)
+
+
+def test_mid_phase_outage_preserves_mixed_counts_and_skips_fill(page, monkeypatch, capsys):
+    filters(page)
+    page.evaluate('''() => {
+        document.querySelector('#coupon').insertAdjacentHTML('afterend',
+            '<button aria-label="Clip for coupon: Save $2.00 on Bread coupon">Clip</button><button aria-label="Clip for coupon: Save $3.00 on Eggs coupon">Clip</button>');
+        document.querySelectorAll('button').forEach(button=>button.onclick=()=>{
+            window.couponClicks++;
+            if (window.couponClicks===1) button.setAttribute('aria-label',button.getAttribute('aria-label').replace(/^Clip /,'Unclip '));
+            if (window.couponClicks===2) document.querySelector('main').insertAdjacentHTML('afterbegin','<p>We’re currently experiencing intermittent problems with Digital coupons.</p>');
+        });
+    }''')
+    original = clipper._wait_for_clip_confirmation
+    monkeypatch.setattr(clipper, '_wait_for_clip_confirmation',
+                        lambda *a: original(*a, timeout=0))
+    monkeypatch.setattr(clipper, '_load_full_coupon_list', lambda *a: None)
+    monkeypatch.setattr(clipper, '_load_verified_unfiltered_list', lambda *a, **kw:
+                        pytest.fail('Incomplete preferred phase must not enter fill'))
+    cfg = config()
+    cfg.fill_to_limit = True
+    assert clipper._run_relevance_mode(page, cfg, args()) == 3
+    assert page.evaluate('window.couponClicks') == 2
+    assert 'Confirmed 1 coupon(s); 1 attempted clip(s) were not confirmed' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('cap', [0, 249])
+def test_unverified_fill_returns_incomplete_with_counts(page, monkeypatch, capsys, cap):
+    filters(page)
+    cfg = config()
+    cfg.max_clips = cap
+    cfg.fill_to_limit = True
+    monkeypatch.setattr(clipper, '_load_full_coupon_list', lambda *a: None)
+    monkeypatch.setattr(clipper, 'scan_coupon_buttons', lambda *a: (10, 49))
+    monkeypatch.setattr(clipper, '_clip_relevant', lambda *a, **kw:
+                        clipper.ClipResult(clipped=2, exhausted=True, failed=1))
+    monkeypatch.setattr(clipper, '_load_verified_unfiltered_list', lambda *a, **kw: (False, 0, 0))
+    assert clipper._run_relevance_mode(page, cfg, args()) == 3
+    output = capsys.readouterr().out
+    assert 'Stopped incomplete. Confirmed 2 coupon(s); fill phase incomplete' in output
+    assert '1 attempted coupon(s) were not confirmed' in output
