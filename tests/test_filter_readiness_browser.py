@@ -135,6 +135,26 @@ def test_outage_after_clipping_preserves_confirmed_and_unconfirmed_counts(page, 
     assert "Done. Clipped" not in output
 
 
+def test_confirmation_wait_accepts_late_response_without_second_click(page):
+    label = "Clip for coupon: Save $1.00 on Milk coupon"
+    page.set_content('<button aria-label="' + label + '">Clip</button>')
+    page.evaluate('''() => {
+        window.clicks = 0;
+        const button = document.querySelector('button');
+        button.onclick = () => {
+            window.clicks++;
+            setTimeout(() => {
+                button.setAttribute('aria-label', 'Unclip for coupon: Save $1.00 on Milk coupon');
+                button.textContent = 'Unclip';
+            }, 6500);
+        };
+    }''')
+    button = page.get_by_role("button", name=label, exact=True)
+    button.click()
+    assert clipper._wait_for_clip_confirmation(page, button, label)
+    assert page.evaluate("window.clicks") == 1
+
+
 def test_replaced_filter_dom_preserves_complete_selection(page):
     filters(page)
     page.evaluate('''() => {
