@@ -254,7 +254,7 @@ def _coupon_key(label: str) -> str:
 
 
 def _wait_for_clip_confirmation(page, locator, original_label, *,
-                                timeout=6.0, poll=0.25):
+                                timeout=30.0, poll=0.25):
     """Wait until QFC exposes the clicked coupon in its clipped state.
 
     Playwright's ``click`` only confirms browser event dispatch; it says nothing
@@ -1038,9 +1038,9 @@ def _run_relevance_mode(page, cfg, args):
     if failed and not confirmation_blocked:
         log(f"NOTE: {failed} attempted coupon(s) were not confirmed and were "
             "not included in the clipped total.")
-    if fill_skip_reason:
+    if fill_skip_reason or confirmation_blocked:
         return 3
-    return 4 if ((limit_hit or confirmation_blocked) and total_used == 0) else 0
+    return 4 if (limit_hit and total_used == 0) else 0
 
 
 def main():
