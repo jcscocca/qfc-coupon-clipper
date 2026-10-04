@@ -27,7 +27,9 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          job_tmp="$RUNNER_TEMP/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          # Chromium Unix sockets require a short path, even when _work is deeply nested.
+          job_tmp=$(mktemp -d /tmp/gha.XXXXXX)
+          echo "CI_JOB_TEMP=$job_tmp" >> "$GITHUB_ENV"
           mkdir -p "$job_tmp" "$HOME/.cache"
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$job_tmp" "$job_tmp" "$job_tmp" >> "$GITHUB_ENV"
           # Do not accidentally invoke Windows executables through WSL interop.
@@ -49,9 +51,19 @@ jobs:
               print("VIRTUAL_ENV=" + str(root / "venv"), file=output)
               print("PYTHONNOUSERSITE=1", file=output)
               for key in ("TMPDIR", "TMP", "TEMP"):
-                  print(key + "=" + str(root / "tmp"), file=output)
+                  print(key + "=" + os.environ.get("CI_JOB_TEMP", str(root / "tmp")), file=output)
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q --ignore=tests/test_filter_readiness_browser.py
+      - name: Remove this job's Linux temporary directory
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          case "${CI_JOB_TEMP:-}" in
+            /tmp/gha.*) rm -rf -- "$CI_JOB_TEMP" ;;
+            '') ;;
+            *) echo "Unexpected temporary directory; refusing cleanup" >&2; exit 1 ;;
+          esac
 
   browser:
     name: Isolated Chromium tests
@@ -71,7 +83,9 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          job_tmp="$RUNNER_TEMP/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          # Chromium Unix sockets require a short path, even when _work is deeply nested.
+          job_tmp=$(mktemp -d /tmp/gha.XXXXXX)
+          echo "CI_JOB_TEMP=$job_tmp" >> "$GITHUB_ENV"
           mkdir -p "$job_tmp" "$HOME/.cache"
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$job_tmp" "$job_tmp" "$job_tmp" >> "$GITHUB_ENV"
           # Do not accidentally invoke Windows executables through WSL interop.
@@ -93,7 +107,17 @@ jobs:
               print("VIRTUAL_ENV=" + str(root / "venv"), file=output)
               print("PYTHONNOUSERSITE=1", file=output)
               for key in ("TMPDIR", "TMP", "TEMP"):
-                  print(key + "=" + str(root / "tmp"), file=output)
+                  print(key + "=" + os.environ.get("CI_JOB_TEMP", str(root / "tmp")), file=output)
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m playwright install chromium
       - run: python -m pytest -q tests/test_filter_readiness_browser.py
+      - name: Remove this job's Linux temporary directory
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          case "${CI_JOB_TEMP:-}" in
+            /tmp/gha.*) rm -rf -- "$CI_JOB_TEMP" ;;
+            '') ;;
+            *) echo "Unexpected temporary directory; refusing cleanup" >&2; exit 1 ;;
+          esac
